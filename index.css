@@ -1,0 +1,41 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Reader top toolbar (Library / issue title / next issue) */
+.reader-toolbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(10, 10, 10, 0.7);
+  backdrop-filter: blur(6px);
+  border-bottom: 3px solid #000;
+}
+
+.reader-title {
+  color: #fff;
+  font-size: clamp(14px, 2.2vw, 22px);
+  letter-spacing: 1px;
+  text-shadow: 2px 2px 0 #000;
+  text-align: center;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Keep the toolbar buttons from inheriting the 3D translateZ used elsewhere */
+.reader-toolbar .comic-btn {
+  transform: none;
+}
+.reader-toolbar .comic-btn:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+}
