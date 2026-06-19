@@ -13,21 +13,80 @@ retold as a real comic where every hero looks like a real player.
 
 - **Multi-issue sagas** — create Issue #1, #2, #3... Each new issue opens with a
   "Previously..." recap and remembers the canon of every issue before it.
+- **GM Campaign Mode** — a full Game Master workspace (see below).
 - **Full party roster** — add as many Heroes, Allies and Villains as you like
   (not just one of each). Perfect for a whole adventuring party.
 - **Classic D&D ability scores** — STR / DEX / CON / INT / WIS / CHA, plus a
   class and backstory that flavour how each character is written.
+- **Persistent character sheets** — player name, status (alive / fallen /
+  retired), notes — carried across issues.
 - **Character consistency** — each character's portrait is reused as a
   reference image on every panel and across every issue, so faces stay stable.
 - **Locked visual style** — pick one art style for the whole saga so issues
   look like they belong together.
+- **Narrator personas (the "story bot")** — pick the voice that writes your
+  comic, including the deadpan, escalating **"Lootzescalation"** persona.
+- **Multi-LLM** — write the story with Gemini, OpenAI (or any OpenAI-compatible
+  cloud like OpenRouter/Groq), or a fully local model.
 - **Branching choices** — "What do you do?" decision pages steer the story, and
   the next pages are written *after* you choose.
+- **Audio** — optional read-aloud narration and a background music underscore.
 - **Safe Mode (default ON)** — see below.
-- **Local-LLM option** — write the story privately on your own machine.
 - **Export** — download any issue as a PDF.
 - **Saved automatically** — your sagas live in your browser (IndexedDB), so you
   can close the tab and come back later.
+
+## 🎲 GM Campaign Mode
+
+Turn on **Game Master Mode** and "Open Campaign Studio" instead of generating a
+story right away. In the studio you can:
+
+- Manage your **real group's player characters** (with the player's name and a
+  live status: alive / fallen / retired).
+- **Prep campaigns**: a premise plus scenes, each with a *plan*, the NPCs
+  involved, and 🔒 *secret GM notes* that never appear in the comic.
+- After the session, record **what actually happened** in each scene and set the
+  **result** (Victory / Defeat / Bittersweet / Ongoing) and any **fallen heroes**.
+- Press **"⚒️ Forge the True Story"** to generate a comic issue that faithfully
+  dramatizes what your party really lived through — so the comics tell the
+  *true* story, win or lose.
+- With **Permadeath** on, characters who fell in a campaign stay fallen across
+  the whole saga.
+
+## 🤖 The Story Bot (narrator personas)
+
+In *Step 2 · World* choose a **Narrator / Story Bot**. Give the saga a short
+seed (a setting or premise) and the persona escalates it into a comic:
+
+- **Classic Narrator** — balanced comic narration following your chosen tone.
+- **Lootzescalation** — dry, offended, forensic first-person protocol. A banal
+  start collapses, via watertight-but-insane domino logic, into a system
+  catastrophe, lands on a sober core, and ends with an absurdly trivial demand.
+
+## 🧠 Multi-LLM: Cloud, OpenAI-compatible, or Local
+
+In *Step 3 · Engine & Safety* pick who writes the story (artwork stays on Gemini):
+
+- **Gemini (Cloud)** — uses your app's Gemini key.
+- **OpenAI / Compatible** — OpenAI or any OpenAI-compatible cloud (OpenRouter,
+  Groq, Together, …). Set base URL + API key + model.
+- **Local LLM (Private)** — an OpenAI-compatible endpoint on your own machine.
+
+Example with [Ollama](https://ollama.com):
+
+```bash
+ollama pull llama3.1
+ollama serve            # exposes an OpenAI-compatible API on :11434
+```
+Base URL `http://localhost:11434/v1`, model `llama3.1`, then **Test connection**.
+
+## 🔊 Audio (optional)
+
+- **Narration** — *Local* uses your browser's built-in voices (free, offline);
+  *ElevenLabs* uses a high-quality cloud voice (needs key + voice id).
+- **Music** — *Ambient* is a gentle, free, offline procedural underscore;
+  *Lyria* is an experimental seam that currently falls back to ambient.
+- Toggle both live from the reader toolbar (🔊 / ♪).
 
 ## 🛡️ Safety (made for kids)
 
@@ -78,12 +137,23 @@ and press **Test connection**.
 
 | File | Responsibility |
 |------|----------------|
-| `types.ts` | Data model: Character, Series, Issue, settings, constants |
+| `types.ts` | Data model: Character, Series, Issue, Campaign, settings, constants |
+| `personas.ts` | Narrator personas / "story bot" voices (incl. Lootzescalation) |
 | `safety.ts` | Input moderation, prompt guardrails, output scrub |
 | `storage.ts` | IndexedDB persistence + lightweight library index |
-| `llm.ts` | Text-provider abstraction (Gemini / local OpenAI-compatible) |
-| `engine.ts` | Generation: portraits, beats, panels, covers, recaps |
-| `App.tsx` | Controller: Home / Setup / Reader screens + saga flow |
+| `llm.ts` | Multi-LLM text provider (Gemini / OpenAI-compatible / local) |
+| `audio.ts` | Narration (TTS) + ambient music underscore |
+| `engine.ts` | Generation: portraits, beats, panels, covers, recaps, campaign canon |
+| `App.tsx` | Controller: Home / Setup / GM Studio / Reader + saga flow |
 | `Home.tsx` | Library of saved sagas |
-| `Setup.tsx` | Party roster + world + engine/safety wizard |
+| `Setup.tsx` | Party roster + world + engine/safety/audio wizard |
+| `GMStudio.tsx` | Game Master campaign prep + true-story forging |
 | `Book.tsx` / `Panel.tsx` | The 3D flip-book reader |
+
+## 🗺️ Roadmap
+
+- **Cameos** — characters are self-contained, portable cards (the data model is
+  cameo-ready), so a hero can guest-star in your other comics, and eventually in
+  *other people's* comics (cross-user sharing is the next step).
+- **Continued character sheets & character creator** — deeper progression.
+- **Lyria real-time music** — full streaming underscore.

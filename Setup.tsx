@@ -7,21 +7,28 @@ import React, { useState } from "react";
 import {
   AUDIENCE_LABELS,
   Audience,
+  AudioConfig,
   Character,
   CharacterRole,
   CHARACTER_CLASSES,
+  defaultAudio,
   defaultStats,
   LANGUAGES,
+  MusicProvider,
   ROLE_LABELS,
   Series,
   STAT_ABBR,
   STAT_KEYS,
   STYLE_PRESETS,
+  TEXT_PROVIDER_LABELS,
+  TextProvider,
   TONES,
+  TtsProvider,
   uid,
 } from "./types";
 import { moderateFields } from "./safety";
-import { pingLocal } from "./llm";
+import { pingProvider } from "./llm";
+import { NARRATOR_PERSONAS } from "./personas";
 
 interface SetupProps {
   series: Series;
@@ -62,6 +69,8 @@ export const Setup: React.FC<SetupProps> = (props) => {
   const set = (patch: Partial<Series>) => props.onChange({ ...series, ...patch });
   const setSettings = (patch: Partial<Series["settings"]>) =>
     set({ settings: { ...series.settings, ...patch } });
+  const audio: AudioConfig = series.audio ?? defaultAudio();
+  const setAudio = (patch: Partial<AudioConfig>) => set({ audio: { ...audio, ...patch } });
 
   // ---- cast helpers ----
   const upsertChar = (c: Character) => {
@@ -121,10 +130,10 @@ export const Setup: React.FC<SetupProps> = (props) => {
     props.onLaunch();
   };
 
-  const testLocal = async () => {
+  const testProvider = async () => {
     setPinging(true);
     setPingMsg("Checking...");
-    const r = await pingLocal(series.provider);
+    const r = await pingProvider(series.provider);
     setPingMsg(r.detail);
     setPinging(false);
   };
@@ -245,6 +254,16 @@ export const Setup: React.FC<SetupProps> = (props) => {
                   </select>
                 </div>
               </div>
+              <div>
+                <label className="font-bold uppercase text-sm block mb-1">Narrator / Story Bot</label>
+                <select value={series.settings.persona ?? "classic"} onChange={(e) => setSettings({ persona: e.target.value })}
+                  className="w-full border-2 border-black p-2 bg-gray-50">
+                  {NARRATOR_PERSONAS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  {NARRATOR_PERSONAS.find((p) => p.id === (series.settings.persona ?? "classic"))?.description}
+                </p>
+              </div>
               <label className="flex items-center gap-2 cursor-pointer bg-yellow-100 p-2 border-2 border-yellow-400 w-fit">
                 <input type="checkbox" checked={series.settings.novelMode} onChange={(e) => setSettings({ novelMode: e.target.checked })} className="w-4 h-4 accent-black" />
                 <span className="text-sm font-bold uppercase">Novel Mode (richer narration)</span>
@@ -272,6 +291,23 @@ export const Setup: React.FC<SetupProps> = (props) => {
                 </label>
               </div>
 
+              {/* GM mode */}
+              <div className="border-4 border-black p-4 bg-amber-50">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input type="checkbox" checked={!!series.gmMode} onChange={(e) => set({ gmMode: e.target.checked })} className="w-6 h-6 accent-amber-600" />
+                  <div>
+                    <div className="font-comic text-xl uppercase">Game Master Mode {series.gmMode ? "(On)" : "(Off)"}</div>
+                    <div className="text-xs text-gray-700">Prep campaigns with scenes &amp; secret notes, run your session, then forge a comic that tells the <b>true story</b> of what your real group did.</div>
+                  </div>
+                </label>
+                {series.gmMode && (
+                  <label className="flex items-center gap-2 mt-3 ml-9 cursor-pointer">
+                    <input type="checkbox" checked={!!series.permadeath} onChange={(e) => set({ permadeath: e.target.checked })} className="w-5 h-5 accent-red-600" />
+                    <span className="text-sm font-bold uppercase">Permadeath — fallen heroes stay fallen across the saga</span>
+                  </label>
+                )}
+              </div>
+
               {/* Audience */}
               <div>
                 <label className="font-bold uppercase text-sm block mb-1">Audience / Rating</label>
@@ -292,13 +328,28 @@ export const Setup: React.FC<SetupProps> = (props) => {
 
               {/* Provider */}
               <div className="border-2 border-black p-4 bg-gray-50">
-                <label className="font-bold uppercase text-sm block mb-2">Story Writer Engine</label>
+                <label className="font-bold uppercase text-sm block mb-2">Story Writer Engine (Multi-LLM)</label>
                 <div className="flex gap-2 mb-2">
-                  <button onClick={() => set({ provider: { ...series.provider, textProvider: "gemini" } })}
-                    className={`flex-1 border-2 border-black p-2 font-comic text-sm ${series.provider.textProvider === "gemini" ? "bg-yellow-400" : "bg-white"}`}>Gemini (Cloud)</button>
-                  <button onClick={() => set({ provider: { ...series.provider, textProvider: "local" } })}
-                    className={`flex-1 border-2 border-black p-2 font-comic text-sm ${series.provider.textProvider === "local" ? "bg-yellow-400" : "bg-white"}`}>Local LLM (Private)</button>
+                  {(["gemini", "openai", "local"] as TextProvider[]).map((p) => (
+                    <button key={p} onClick={() => set({ provider: { ...series.provider, textProvider: p } })}
+                      className={`flex-1 border-2 border-black p-2 font-comic text-xs ${series.provider.textProvider === p ? "bg-yellow-400" : "bg-white"}`}>
+                      {TEXT_PROVIDER_LABELS[p]}
+                    </button>
+                  ))}
                 </div>
+                {series.provider.textProvider === "openai" && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-gray-600">OpenAI or any OpenAI-compatible cloud (OpenRouter, Groq, Together…). Artwork still uses Gemini.</p>
+                    <input value={series.provider.openaiBaseUrl} onChange={(e) => set({ provider: { ...series.provider, openaiBaseUrl: e.target.value } })}
+                      className="w-full border-2 border-black p-2 text-sm" placeholder="https://api.openai.com/v1" />
+                    <input type="password" value={series.provider.openaiApiKey} onChange={(e) => set({ provider: { ...series.provider, openaiApiKey: e.target.value } })}
+                      className="w-full border-2 border-black p-2 text-sm" placeholder="API key (sk-...)" />
+                    <input value={series.provider.openaiModel} onChange={(e) => set({ provider: { ...series.provider, openaiModel: e.target.value } })}
+                      className="w-full border-2 border-black p-2 text-sm" placeholder="gpt-4o-mini" />
+                    <button onClick={testProvider} disabled={pinging} className="comic-btn bg-blue-500 text-white px-4 py-1 text-sm">Test connection</button>
+                    {pingMsg && <p className="text-xs font-bold">{pingMsg}</p>}
+                  </div>
+                )}
                 {series.provider.textProvider === "local" && (
                   <div className="space-y-2">
                     <p className="text-xs text-gray-600">Runs the writing on your own machine (Ollama, LM Studio, llama.cpp). Artwork still uses Gemini.</p>
@@ -306,17 +357,66 @@ export const Setup: React.FC<SetupProps> = (props) => {
                       className="w-full border-2 border-black p-2 text-sm" placeholder="http://localhost:11434/v1" />
                     <input value={series.provider.localModel} onChange={(e) => set({ provider: { ...series.provider, localModel: e.target.value } })}
                       className="w-full border-2 border-black p-2 text-sm" placeholder="llama3.1" />
-                    <button onClick={testLocal} disabled={pinging} className="comic-btn bg-blue-500 text-white px-4 py-1 text-sm">Test connection</button>
+                    <button onClick={testProvider} disabled={pinging} className="comic-btn bg-blue-500 text-white px-4 py-1 text-sm">Test connection</button>
                     {pingMsg && <p className="text-xs font-bold">{pingMsg}</p>}
                   </div>
                 )}
+                {series.provider.textProvider === "gemini" && (
+                  <p className="text-xs text-gray-600">Uses your app's Gemini API key for both story and art.</p>
+                )}
+              </div>
+
+              {/* Audio */}
+              <div className="border-2 border-black p-4 bg-gray-50">
+                <label className="font-bold uppercase text-sm block mb-2">Audio (optional)</label>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div>
+                    <span className="text-xs font-bold uppercase block mb-1">Narration (read aloud)</span>
+                    <div className="flex gap-1">
+                      {(["off", "local", "elevenlabs"] as TtsProvider[]).map((t) => (
+                        <button key={t} onClick={() => setAudio({ tts: t })}
+                          className={`flex-1 border-2 border-black p-1 text-xs font-comic ${audio.tts === t ? "bg-yellow-400" : "bg-white"}`}>
+                          {t === "off" ? "Off" : t === "local" ? "Local (free)" : "ElevenLabs"}
+                        </button>
+                      ))}
+                    </div>
+                    {audio.tts === "elevenlabs" && (
+                      <div className="space-y-1 mt-2">
+                        <input type="password" value={audio.elevenApiKey ?? ""} onChange={(e) => setAudio({ elevenApiKey: e.target.value })}
+                          className="w-full border-2 border-black p-1.5 text-xs" placeholder="ElevenLabs API key" />
+                        <input value={audio.elevenVoiceId ?? ""} onChange={(e) => setAudio({ elevenVoiceId: e.target.value })}
+                          className="w-full border-2 border-black p-1.5 text-xs" placeholder="Voice ID" />
+                      </div>
+                    )}
+                    {audio.tts === "local" && <p className="text-xs text-gray-500 mt-1">Uses your browser's built-in voices — free, offline, no key.</p>}
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold uppercase block mb-1">Background music</span>
+                    <div className="flex gap-1">
+                      {(["off", "ambient", "lyria"] as MusicProvider[]).map((m) => (
+                        <button key={m} onClick={() => setAudio({ music: m })}
+                          className={`flex-1 border-2 border-black p-1 text-xs font-comic ${audio.music === m ? "bg-yellow-400" : "bg-white"}`}>
+                          {m === "off" ? "Off" : m === "ambient" ? "Ambient (free)" : "Lyria*"}
+                        </button>
+                      ))}
+                    </div>
+                    {audio.music === "lyria" && <p className="text-xs text-gray-500 mt-1">*Lyria streaming is experimental; falls back to the free ambient pad for now.</p>}
+                    {audio.music !== "off" && (
+                      <div className="mt-2">
+                        <span className="text-xs">Volume</span>
+                        <input type="range" min={0} max={0.4} step={0.02} value={audio.musicVolume}
+                          onChange={(e) => setAudio({ musicVolume: parseFloat(e.target.value) })} className="w-full" />
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <div className="flex gap-3 pt-2">
                 <button onClick={() => setStep(2)} className="comic-btn bg-gray-400 px-4 py-3 font-comic uppercase">Back</button>
                 <button onClick={launch} disabled={heroCount === 0 || props.isTransitioning}
                   className="comic-btn bg-red-600 text-white text-2xl px-6 py-3 w-full uppercase font-comic disabled:bg-gray-400">
-                  {props.isTransitioning ? "Summoning..." : "Roll Initiative!"}
+                  {props.isTransitioning ? "Summoning..." : series.gmMode ? "Open Campaign Studio →" : "Roll Initiative!"}
                 </button>
               </div>
             </div>
@@ -345,6 +445,10 @@ export const Setup: React.FC<SetupProps> = (props) => {
               <div className="flex-1 space-y-2">
                 <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                   className="w-full border-2 border-black p-2 font-comic text-lg" placeholder="Character name" />
+                {series.gmMode && draft.role === "hero" && (
+                  <input value={draft.player ?? ""} onChange={(e) => setDraft({ ...draft, player: e.target.value })}
+                    className="w-full border-2 border-blue-400 p-2 text-sm" placeholder="Real player's name (e.g. 'Played by Mia')" />
+                )}
                 <div className="flex gap-2">
                   <select value={draft.role} onChange={(e) => setDraft({ ...draft, role: e.target.value as CharacterRole })} className="border-2 border-black p-2 text-sm flex-1">
                     {(["hero", "ally", "villain"] as CharacterRole[]).map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}

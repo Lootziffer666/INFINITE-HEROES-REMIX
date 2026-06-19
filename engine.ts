@@ -22,10 +22,12 @@
 import { GoogleGenAI } from "@google/genai";
 import {
   Beat,
+  Campaign,
   Character,
   FaceType,
   LANGUAGES,
   MAX_STORY_PAGES,
+  RESULT_LABELS,
   Series,
 } from "./types";
 import { generateText, extractJson, GEMINI_TEXT_MODEL } from "./llm";
@@ -34,6 +36,7 @@ import {
   sanitizeOutput,
   writerGuardrails,
 } from "./safety";
+import { getPersona } from "./personas";
 
 const GEMINI_IMAGE_MODEL = "gemini-3-pro-image-preview";
 
@@ -43,6 +46,13 @@ export interface EngineContext {
   priorSynopses: string[];
   /** Issue number currently being generated. */
   issueNumber: number;
+  /**
+   * GM mode: canonical record of a real campaign this issue must faithfully
+   * dramatize (premise, what actually happened scene-by-scene, the result,
+   * and who fell). When present, the writer adapts reality instead of
+   * inventing freely.
+   */
+  campaignCanon?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +75,37 @@ function langName(code: string): string {
 
 function getAI(): GoogleGenAI {
   return new GoogleGenAI({ apiKey: process.env.API_KEY });
+}
+
+/**
+ * Compile a GM campaign into a canonical "this really happened" briefing the
+ * writer must dramatize faithfully (used for true-story issues).
+ */
+export function buildCampaignCanon(series: Series, campaign: Campaign): string {
+  const nameOf = (id: string) =>
+    series.cast.find((c) => c.id === id)?.name || "an unnamed hero";
+  const lines: string[] = [];
+  lines.push(`CAMPAIGN: "${campaign.title}".`);
+  if (campaign.premise) lines.push(`PREMISE: ${campaign.premise}`);
+
+  const played = campaign.scenes.filter((s) => s.status === "played");
+  const scenes = played.length ? played : campaign.scenes;
+  if (scenes.length) {
+    lines.push("WHAT HAPPENED, IN ORDER:");
+    scenes.forEach((s, i) => {
+      const what = s.outcome?.trim() || s.plan?.trim() || s.title;
+      const who = s.npcs?.length ? ` (featuring: ${s.npcs.join(", ")})` : "";
+      lines.push(`${i + 1}. ${s.title}: ${what}${who}`);
+    });
+  }
+  lines.push(`RESULT: ${RESULT_LABELS[campaign.result]}.`);
+  if (campaign.resultNotes) lines.push(`ENDING: ${campaign.resultNotes}`);
+  if (campaign.casualties.length) {
+    lines.push(
+      `HEROES WHO FELL: ${campaign.casualties.map(nameOf).join(", ")}. Give their sacrifice meaning.`,
+    );
+  }
+  return lines.join("\n");
 }
 
 function castLine(c: Character): string {
@@ -114,10 +155,11 @@ export async function generateBeat(
   ctx: EngineContext,
   req: BeatRequest,
 ): Promise<Beat> {
-  const { series, priorSynopses, issueNumber } = ctx;
+  const { series, priorSynopses, issueNumber, campaignCanon } = ctx;
   const { history, pageNum, isDecisionPage } = req;
   const lang = langName(series.settings.language);
   const isFinal = pageNum === MAX_STORY_PAGES;
+  const persona = getPersona(series.settings.persona);
 
   const castSheet = series.cast.map(castLine).join("\n");
   const heroNames = series.cast
@@ -146,8 +188,9 @@ export async function generateBeat(
 
   let arc = "";
   if (isFinal) {
-    arc =
-      "FINAL PAGE. Resolve this issue's main conflict in a satisfying way, then plant ONE hook for the next issue. End the text with 'TO BE CONTINUED...' (or a localised equivalent).";
+    arc = campaignCanon
+      ? "FINAL PAGE. Land the campaign's REAL ending exactly as recorded (victory, defeat, or bittersweet). Honour any heroes who fell. End with a heartfelt closing caption."
+      : "FINAL PAGE. Resolve this issue's main conflict in a satisfying way, then plant ONE hook for the next issue. End the text with 'TO BE CONTINUED...' (or a localised equivalent).";
   } else if (isDecisionPage) {
     arc =
       "End on a meaningful CHOICE about values, relationships, or risk (e.g. Truth vs. Safety, Help a stranger vs. Stay on mission). The two options must be character-driven, not 'go left / go right'.";
@@ -164,6 +207,13 @@ export async function generateBeat(
     arc = "CLIMAX. The confrontation. Pay off the issue's central question.";
   }
 
+  // A narrator persona may override the per-page arc (except on branching
+  // decision pages and faithful campaign retellings).
+  if (!campaignCanon && !isDecisionPage && persona.arc) {
+    const pa = persona.arc(pageNum, MAX_STORY_PAGES);
+    if (pa) arc = pa;
+  }
+
   const capLimit = series.settings.novelMode
     ? "max 38 words, rich narration or inner monologue"
     : "max 16 words";
@@ -173,8 +223,17 @@ export async function generateBeat(
 
   const system = [
     "You are a master comic-book writer scripting one panel at a time for an ongoing saga.",
+    `NARRATOR PERSONA — ${persona.name}: ${persona.voice}`,
     writerGuardrails(series.settings.audience, series.safeMode),
   ].join("\n");
+
+  const trueStoryBlock = campaignCanon
+    ? `
+TRUE STORY MODE (GM CAMPAIGN — THIS REALLY HAPPENED AT THE TABLE):
+${campaignCanon}
+You MUST dramatize these real events faithfully across the ${MAX_STORY_PAGES} pages, in order, without contradicting them or inventing a different outcome. This page (${pageNum}/${MAX_STORY_PAGES}) should cover the corresponding part of that timeline. Treat fallen heroes' fates with weight appropriate to the audience.
+`
+    : "";
 
   const prompt = `
 SAGA: "${series.title}" — Issue #${issueNumber}, Page ${pageNum} of ${MAX_STORY_PAGES}.
@@ -186,7 +245,7 @@ ${castSheet}
 HEROES: ${heroNames || "(none yet)"} | VILLAINS: ${villainNames || "(none yet)"}
 
 ${continuity}
-
+${trueStoryBlock}
 PANELS SO FAR THIS ISSUE:
 ${historyText || "(none — this is the opening panel)"}
 

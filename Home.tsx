@@ -42,6 +42,7 @@ export const Home: React.FC<HomeProps> = ({ library, onCreate, onOpen, onDelete 
                       <div className="w-full h-full flex items-center justify-center font-comic text-gray-500 text-center p-3">{s.title}</div>
                     )}
                     <span className="absolute top-1 right-1 bg-black text-white text-xs font-comic px-2 py-0.5">#{s.issueCount}</span>
+                    {s.gmMode && <span className="absolute bottom-1 right-1 bg-amber-400 text-black text-[10px] font-bold px-1.5 py-0.5 border border-black">GM</span>}
                     {s.safeMode && <span className="absolute top-1 left-1 bg-green-400 text-black text-[10px] font-bold px-1.5 py-0.5 border border-black">SAFE</span>}
                   </div>
                 </button>

@@ -6,8 +6,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import jsPDF from "jspdf";
 import {
+  AudioConfig,
   ComicFace,
   DECISION_PAGES,
+  defaultAudio,
   defaultProvider,
   Issue,
   MAX_STORY_PAGES,
@@ -20,9 +22,11 @@ import {
 import { Setup } from "./Setup";
 import { Book } from "./Book";
 import { Home } from "./Home";
+import { GMStudio } from "./GMStudio";
 import { useApiKey } from "./useApiKey";
 import { ApiKeyDialog } from "./ApiKeyDialog";
 import {
+  buildCampaignCanon,
   EngineContext,
   generateBeat,
   generatePanelImage,
@@ -36,8 +40,9 @@ import {
   loadSeries,
   saveSeries,
 } from "./storage";
+import { narrate, startMusic, stopMusic, stopNarration } from "./audio";
 
-type Screen = "home" | "setup" | "reader";
+type Screen = "home" | "setup" | "reader" | "gm";
 
 const newSeries = (): Series => ({
   id: uid(),
@@ -54,12 +59,17 @@ const newSeries = (): Series => ({
   safeMode: true,
   provider: defaultProvider(),
   issues: [],
+  gmMode: false,
+  permadeath: false,
+  campaigns: [],
+  audio: defaultAudio(),
   createdAt: Date.now(),
   updatedAt: Date.now(),
 });
 
-// Build the page layout for a fresh issue.
-const buildIssueFaces = (issueNumber: number): ComicFace[] => {
+// Build the page layout for a fresh issue. True-story (campaign) issues skip
+// the branching decision pages so the comic tells exactly what happened.
+const buildIssueFaces = (issueNumber: number, withDecisions: boolean): ComicFace[] => {
   const hasRecap = issueNumber > 1;
   const faces: ComicFace[] = [];
   let idx = 0;
@@ -74,7 +84,7 @@ const buildIssueFaces = (issueNumber: number): ComicFace[] => {
       isLoading: false,
       pageIndex: idx++,
       beatNum: b,
-      isDecisionPage: DECISION_PAGES.includes(b),
+      isDecisionPage: withDecisions && DECISION_PAGES.includes(b),
     });
   }
   faces.push({ id: `i${issueNumber}-back`, type: "back_cover", choices: [], isLoading: true, pageIndex: idx++ });
@@ -101,18 +111,56 @@ const App: React.FC = () => {
   seriesRef.current = series;
   activeIssueRef.current = activeIssueId;
 
+  const audioCfg: AudioConfig = series.audio ?? defaultAudio();
+
   useEffect(() => {
     setLibrary(listSeries());
   }, []);
 
+  // ----- Audio: music underscore while reading -----
+  useEffect(() => {
+    if (screen === "reader" && audioCfg.music !== "off") startMusic(audioCfg);
+    else stopMusic();
+    return () => stopMusic();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, audioCfg.music]);
+
+  // ----- Audio: narrate the page you just turned to -----
+  useEffect(() => {
+    if (screen !== "reader") {
+      stopNarration();
+      return;
+    }
+    if (audioCfg.tts === "off") {
+      stopNarration();
+      return;
+    }
+    const ordered = [...comicFaces].sort((a, b) => (a.pageIndex || 0) - (b.pageIndex || 0));
+    const face = ordered[currentSheetIndex * 2];
+    const text = `${face?.narrative?.caption || ""}. ${face?.narrative?.dialogue || ""}`.trim();
+    if (text.length > 2) narrate(text, audioCfg, series.settings.language);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSheetIndex, screen]);
+
+  useEffect(() => () => { stopNarration(); stopMusic(); }, []);
+
   // ----- Engine context -----
   const buildCtx = (issueNumber: number): EngineContext => {
     const s = seriesRef.current;
+    const issue = s.issues.find((i) => i.id === activeIssueRef.current);
+    const campaign = issue?.sourceCampaignId
+      ? s.campaigns?.find((c) => c.id === issue.sourceCampaignId)
+      : undefined;
     const priorSynopses = s.issues
       .filter((i) => i.number < issueNumber && i.synopsis)
       .sort((a, b) => a.number - b.number)
       .map((i) => i.synopsis as string);
-    return { series: s, priorSynopses, issueNumber };
+    return {
+      series: s,
+      priorSynopses,
+      issueNumber,
+      campaignCanon: campaign ? buildCampaignCanon(s, campaign) : undefined,
+    };
   };
 
   const handleAuth = (e: unknown) => {
@@ -129,7 +177,11 @@ const App: React.FC = () => {
   const persist = async (extra?: Partial<Issue>) => {
     const s = seriesRef.current;
     const issueId = activeIssueRef.current;
-    if (!issueId) return;
+    if (!issueId) {
+      await saveSeries(s);
+      setLibrary(listSeries());
+      return;
+    }
     const issues = s.issues.map((i) =>
       i.id === issueId
         ? { ...i, faces: [...facesRef.current], updatedAt: Date.now(), ...extra }
@@ -143,10 +195,9 @@ const App: React.FC = () => {
   };
 
   // ----- Generation -----
-  const currentIssueNumber = (): number => {
-    const issue = seriesRef.current.issues.find((i) => i.id === activeIssueRef.current);
-    return issue?.number ?? 1;
-  };
+  const currentIssue = (): Issue | undefined =>
+    seriesRef.current.issues.find((i) => i.id === activeIssueRef.current);
+  const currentIssueNumber = (): number => currentIssue()?.number ?? 1;
 
   const beatHistory = (beforeBeat: number) =>
     facesRef.current
@@ -176,15 +227,12 @@ const App: React.FC = () => {
     }
   };
 
-  // Generate forward from `start`, pausing AFTER a decision beat so the
-  // reader's choice can shape everything that follows.
   const generateFrom = async (start: number) => {
     for (let b = start; b <= MAX_STORY_PAGES; b++) {
       if (generatingBeats.current.has(b)) continue;
       const face = facesRef.current.find((f) => f.type === "story" && f.beatNum === b);
       if (!face) continue;
       if (face.imageUrl) {
-        // Already drawn: stop at an unresolved decision, otherwise keep scanning.
         if (face.isDecisionPage && !face.resolvedChoice) break;
         continue;
       }
@@ -195,7 +243,7 @@ const App: React.FC = () => {
         generatingBeats.current.delete(b);
       }
       await persist();
-      if (face.isDecisionPage) break; // wait for the reader to choose
+      if (face.isDecisionPage) break;
     }
     await maybeFinishIssue();
     await persist();
@@ -238,9 +286,7 @@ const App: React.FC = () => {
     const back = facesRef.current.find((f) => f.type === "back_cover");
     const ctx = buildCtx(currentIssueNumber());
 
-    // Summarise for continuity (only once).
-    const issueId = activeIssueRef.current;
-    const issue = seriesRef.current.issues.find((i) => i.id === issueId);
+    const issue = currentIssue();
     if (issue && !issue.synopsis) {
       try {
         const synopsis = await summarizeIssue(
@@ -271,41 +317,43 @@ const App: React.FC = () => {
   };
 
   // ----- Launching issues -----
-  const launchIssue = async (s: Series, issueNumber: number, issueId: string) => {
-    const faces = buildIssueFaces(issueNumber);
+  const launchIssue = async (issueNumber: number, withDecisions: boolean) => {
+    const faces = buildIssueFaces(issueNumber, withDecisions);
     facesRef.current = faces;
     generatingBeats.current.clear();
     setComicFaces(faces);
     setCurrentSheetIndex(0);
-
     setScreen("reader");
     setIsTransitioning(false);
 
-    // Kick off cover + recap + the first run of beats (pauses at decision 1).
     generateCover();
     if (issueNumber > 1) generateRecap();
     await generateFrom(1);
   };
 
   const startNewSaga = async () => {
-    const hasKey = await validateApiKey();
-    if (!hasKey) return;
     const s = seriesRef.current;
     if (s.cast.filter((c) => c.role === "hero").length === 0) {
-      alert("Add at least one Hero before starting your saga.");
+      alert("Add at least one Hero before starting.");
       return;
     }
+    // GM mode: prep campaigns first, forge comics later.
+    if (s.gmMode) {
+      await saveSeries(s);
+      setLibrary(listSeries());
+      setActiveIssueId(null);
+      activeIssueRef.current = null;
+      setScreen("gm");
+      return;
+    }
+    const hasKey = await validateApiKey();
+    if (!hasKey) return;
     setIsTransitioning(true);
     const issueId = uid();
     const issue: Issue = {
-      id: issueId,
-      number: 1,
-      title: `${s.title} — Issue #1`,
-      faces: [],
-      choiceLog: [],
-      status: "generating",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      id: issueId, number: 1, title: `${s.title} — Issue #1`,
+      faces: [], choiceLog: [], status: "generating",
+      createdAt: Date.now(), updatedAt: Date.now(),
     };
     const updated: Series = { ...s, issues: [issue] };
     seriesRef.current = updated;
@@ -313,24 +361,21 @@ const App: React.FC = () => {
     setActiveIssueId(issueId);
     activeIssueRef.current = issueId;
     await saveSeries(updated);
-    setTimeout(() => launchIssue(updated, 1, issueId), 1000);
+    setTimeout(() => launchIssue(1, true), 1000);
   };
+
+  const nextIssueNumber = (s: Series) => Math.max(0, ...s.issues.map((i) => i.number)) + 1;
 
   const startNextIssue = async () => {
     const hasKey = await validateApiKey();
     if (!hasKey) return;
     const s = seriesRef.current;
-    const nextNumber = Math.max(0, ...s.issues.map((i) => i.number)) + 1;
+    const number = nextIssueNumber(s);
     const issueId = uid();
     const issue: Issue = {
-      id: issueId,
-      number: nextNumber,
-      title: `${s.title} — Issue #${nextNumber}`,
-      faces: [],
-      choiceLog: [],
-      status: "generating",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      id: issueId, number, title: `${s.title} — Issue #${number}`,
+      faces: [], choiceLog: [], status: "generating",
+      createdAt: Date.now(), updatedAt: Date.now(),
     };
     const updated: Series = { ...s, issues: [...s.issues, issue] };
     seriesRef.current = updated;
@@ -338,7 +383,39 @@ const App: React.FC = () => {
     setActiveIssueId(issueId);
     activeIssueRef.current = issueId;
     await saveSeries(updated);
-    launchIssue(updated, nextNumber, issueId);
+    launchIssue(number, true);
+  };
+
+  // ----- GM: forge a true-story issue from a campaign -----
+  const forgeCampaignIssue = async (campaignId: string) => {
+    const hasKey = await validateApiKey();
+    if (!hasKey) return;
+    const s = seriesRef.current;
+    const campaign = s.campaigns?.find((c) => c.id === campaignId);
+    if (!campaign) return;
+    const number = nextIssueNumber(s);
+    const issueId = uid();
+    const issue: Issue = {
+      id: issueId, number,
+      title: `${campaign.title} (Issue #${number})`,
+      faces: [], choiceLog: [], status: "generating",
+      sourceCampaignId: campaignId,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    };
+    // Apply permadeath: campaign casualties become fallen on the roster.
+    const cast = s.permadeath
+      ? s.cast.map((c) => (campaign.casualties.includes(c.id) ? { ...c, status: "fallen" as const } : c))
+      : s.cast;
+    const campaigns = (s.campaigns ?? []).map((c) =>
+      c.id === campaignId ? { ...c, forgedIssueIds: [...c.forgedIssueIds, issueId] } : c,
+    );
+    const updated: Series = { ...s, cast, campaigns, issues: [...s.issues, issue] };
+    seriesRef.current = updated;
+    setSeries(updated);
+    setActiveIssueId(issueId);
+    activeIssueRef.current = issueId;
+    await saveSeries(updated);
+    launchIssue(number, false); // true-story: no branching
   };
 
   const openIssue = (s: Series, issueId: string) => {
@@ -348,12 +425,13 @@ const App: React.FC = () => {
     setSeries(s);
     setActiveIssueId(issueId);
     activeIssueRef.current = issueId;
-    const faces = issue.faces.length ? issue.faces : buildIssueFaces(issue.number);
+    const faces = issue.faces.length
+      ? issue.faces
+      : buildIssueFaces(issue.number, !issue.sourceCampaignId);
     facesRef.current = faces.map((f) => ({ ...f }));
     setComicFaces(facesRef.current);
     setCurrentSheetIndex(0);
     setScreen("reader");
-    // Resume any unfinished beats.
     const firstMissing = facesRef.current.find((f) => f.type === "story" && !f.imageUrl && !f.error);
     if (firstMissing) generateFrom(firstMissing.beatNum || 1);
   };
@@ -387,11 +465,39 @@ const App: React.FC = () => {
     else if (index === currentSheetIndex && index < sheetCount) setCurrentSheetIndex((p) => p + 1);
   };
 
-  // ----- Library actions -----
+  // ----- Audio toggles (reader toolbar) -----
+  const toggleNarration = () => {
+    const cur = series.audio ?? defaultAudio();
+    const tts = cur.tts === "off" ? (cur.elevenApiKey ? "elevenlabs" : "local") : "off";
+    const updated = { ...series, audio: { ...cur, tts } as AudioConfig };
+    seriesRef.current = updated;
+    setSeries(updated);
+    if (tts === "off") stopNarration();
+  };
+  const toggleMusic = () => {
+    const cur = series.audio ?? defaultAudio();
+    const music = cur.music === "off" ? "ambient" : "off";
+    const updated = { ...series, audio: { ...cur, music } as AudioConfig };
+    seriesRef.current = updated;
+    setSeries(updated);
+  };
+
+  // ----- Library / navigation actions -----
   const goHome = async () => {
     if (activeIssueRef.current) await persist();
+    stopNarration();
+    stopMusic();
     setScreen("home");
     setLibrary(listSeries());
+  };
+
+  const goStudio = async () => {
+    if (activeIssueRef.current) await persist();
+    stopNarration();
+    stopMusic();
+    setActiveIssueId(null);
+    activeIssueRef.current = null;
+    setScreen("gm");
   };
 
   const createSaga = () => {
@@ -405,19 +511,18 @@ const App: React.FC = () => {
 
   const openSaga = async (id: string) => {
     const s = await loadSeries(id);
-    if (!s) {
-      alert("Could not load that saga.");
-      return;
-    }
+    if (!s) { alert("Could not load that saga."); return; }
     seriesRef.current = s;
     setSeries(s);
-    const latest = [...s.issues].sort((a, b) => b.number - a.number)[0];
-    if (latest) openIssue(s, latest.id);
-    else {
+    if (s.gmMode) {
       setActiveIssueId(null);
       activeIssueRef.current = null;
-      setScreen("setup");
+      setScreen("gm");
+      return;
     }
+    const latest = [...s.issues].sort((a, b) => b.number - a.number)[0];
+    if (latest) openIssue(s, latest.id);
+    else { setActiveIssueId(null); activeIssueRef.current = null; setScreen("setup"); }
   };
 
   const removeSaga = async (id: string) => {
@@ -437,10 +542,21 @@ const App: React.FC = () => {
     }
   };
 
+  // GMStudio / Setup change handler. Updates state immediately and persists on
+  // a short debounce so per-keystroke edits don't hammer IndexedDB.
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onSeriesChange = (s: Series) => {
+    seriesRef.current = s;
+    setSeries(s);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveSeries(seriesRef.current).then(() => setLibrary(listSeries()));
+    }, 700);
+  };
+
   // ----- Export -----
   const downloadPDF = () => {
-    const W = 480;
-    const H = 720;
+    const W = 480, H = 720;
     const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: [W, H] });
     const pages = facesRef.current
       .filter((f) => f.imageUrl && !f.isLoading)
@@ -449,8 +565,7 @@ const App: React.FC = () => {
       if (i > 0) doc.addPage([W, H], "portrait");
       if (face.imageUrl) doc.addImage(face.imageUrl, "JPEG", 0, 0, W, H);
     });
-    const num = currentIssueNumber();
-    doc.save(`${seriesRef.current.title.replace(/\s+/g, "-")}-Issue-${num}.pdf`);
+    doc.save(`${seriesRef.current.title.replace(/\s+/g, "-")}-Issue-${currentIssueNumber()}.pdf`);
   };
 
   // ----- Derived UI flags -----
@@ -458,51 +573,64 @@ const App: React.FC = () => {
   const issueComplete =
     comicFaces.length > 0 &&
     comicFaces.filter((f) => f.type === "story").every((f) => f.imageUrl || f.error);
+  const inGmIssue = !!activeIssue?.sourceCampaignId;
 
   return (
     <div className="comic-scene">
       {showApiKeyDialog && <ApiKeyDialog onContinue={handleApiKeyDialogContinue} />}
 
       {screen === "home" && (
-        <Home
-          library={library}
-          onCreate={createSaga}
-          onOpen={openSaga}
-          onDelete={removeSaga}
-        />
+        <Home library={library} onCreate={createSaga} onOpen={openSaga} onDelete={removeSaga} />
       )}
 
       {screen === "setup" && (
         <Setup
           series={series}
           isTransitioning={isTransitioning}
-          onChange={(s) => {
-            seriesRef.current = s;
-            setSeries(s);
-          }}
+          onChange={onSeriesChange}
           onGeneratePortrait={onGeneratePortrait}
           onLaunch={startNewSaga}
           onBack={goHome}
         />
       )}
 
+      {screen === "gm" && (
+        <GMStudio
+          series={series}
+          onChange={onSeriesChange}
+          onForge={forgeCampaignIssue}
+          onOpenIssue={(issueId) => openIssue(seriesRef.current, issueId)}
+          onBack={goHome}
+          onEditRoster={() => setScreen("setup")}
+        />
+      )}
+
       {screen === "reader" && (
         <>
           <div className="reader-toolbar">
-            <button className="comic-btn bg-white text-black px-3 py-1 text-sm" onClick={goHome}>
-              ← Library
+            <button className="comic-btn bg-white text-black px-3 py-1 text-sm" onClick={inGmIssue ? goStudio : goHome}>
+              {inGmIssue ? "← Studio" : "← Library"}
             </button>
             <span className="reader-title font-comic">
-              {series.title} · Issue #{activeIssue?.number ?? 1}
+              {series.title} · {activeIssue?.sourceCampaignId ? activeIssue.title : `Issue #${activeIssue?.number ?? 1}`}
             </span>
-            <button
-              className="comic-btn bg-yellow-400 text-black px-3 py-1 text-sm disabled:opacity-50"
-              onClick={startNextIssue}
-              disabled={!issueComplete}
-              title={issueComplete ? "Continue the saga" : "Finish this issue first"}
-            >
-              + Next Issue
-            </button>
+            <div className="flex items-center gap-1">
+              <button onClick={toggleNarration} title="Narration (read aloud)"
+                className={`comic-btn px-2 py-1 text-sm ${audioCfg.tts !== "off" ? "bg-green-400" : "bg-white"} text-black`}>
+                {audioCfg.tts !== "off" ? "🔊" : "🔇"}
+              </button>
+              <button onClick={toggleMusic} title="Background music"
+                className={`comic-btn px-2 py-1 text-sm ${audioCfg.music !== "off" ? "bg-green-400" : "bg-white"} text-black`}>
+                ♪
+              </button>
+              {!inGmIssue && (
+                <button className="comic-btn bg-yellow-400 text-black px-3 py-1 text-sm disabled:opacity-50"
+                  onClick={startNextIssue} disabled={!issueComplete}
+                  title={issueComplete ? "Continue the saga" : "Finish this issue first"}>
+                  + Next Issue
+                </button>
+              )}
+            </div>
           </div>
 
           <Book
@@ -514,7 +642,7 @@ const App: React.FC = () => {
             onChoice={handleChoice}
             onOpenBook={() => setCurrentSheetIndex(1)}
             onDownload={downloadPDF}
-            onReset={startNextIssue}
+            onReset={inGmIssue ? goStudio : startNextIssue}
             onRegenerateFace={regenerateFace}
           />
         </>

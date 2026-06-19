@@ -4,12 +4,14 @@
  *
  * llm.ts
  * ------
- * Text-generation provider abstraction. The story SCRIPT can be written either
- * by Gemini (cloud) or by a LOCAL model exposed through an OpenAI-compatible
- * endpoint (Ollama at /v1, LM Studio, llama.cpp server, etc.).
+ * Multi-LLM text-generation abstraction. The story SCRIPT can be written by:
+ *   - "gemini"  -> Google Gemini (cloud).
+ *   - "openai"  -> OpenAI or ANY OpenAI-compatible cloud (OpenRouter, Groq,
+ *                  Together, Azure-style, etc.) via base URL + API key.
+ *   - "local"   -> a local OpenAI-compatible endpoint (Ollama, LM Studio,
+ *                  llama.cpp server) with no key.
  *
- * Image generation is NOT abstracted here — it stays on Gemini (engine.ts),
- * since local open models can't yet match the character-consistent panel art.
+ * Image generation is NOT abstracted here — it stays on Gemini (engine.ts).
  */
 
 import { GoogleGenAI } from "@google/genai";
@@ -18,11 +20,8 @@ import { ProviderConfig } from "./types";
 export const GEMINI_TEXT_MODEL = "gemini-3-pro-image-preview";
 
 export interface TextRequest {
-  /** System / role framing instruction. */
   system: string;
-  /** The actual user prompt (the script request). */
   prompt: string;
-  /** Hint that we expect strict JSON back. */
   json?: boolean;
 }
 
@@ -47,14 +46,21 @@ async function generateGemini(req: TextRequest): Promise<string> {
   return res.text || "";
 }
 
-async function generateLocal(
+interface OpenAITarget {
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+}
+
+/** Single code path for OpenAI, OpenAI-compatible clouds, and local servers. */
+async function generateOpenAICompatible(
   req: TextRequest,
-  cfg: ProviderConfig,
+  target: OpenAITarget,
 ): Promise<string> {
-  const base = cfg.localBaseUrl.replace(/\/+$/, "");
+  const base = target.baseUrl.replace(/\/+$/, "");
   const url = `${base}/chat/completions`;
   const body: Record<string, unknown> = {
-    model: cfg.localModel,
+    model: target.model,
     messages: [
       { role: "system", content: req.system },
       { role: "user", content: req.prompt },
@@ -64,23 +70,36 @@ async function generateLocal(
   };
   if (req.json) body.response_format = { type: "json_object" };
 
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (target.apiKey) headers.Authorization = `Bearer ${target.apiKey}`;
+
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 120_000);
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(body),
       signal: ctrl.signal,
     });
     if (!res.ok) {
-      throw new Error(`Local LLM HTTP ${res.status}: ${await res.text()}`);
+      throw new Error(`LLM HTTP ${res.status}: ${await res.text()}`);
     }
     const data = await res.json();
     return data?.choices?.[0]?.message?.content ?? "";
   } finally {
     clearTimeout(timer);
   }
+}
+
+function targetFor(cfg: ProviderConfig): OpenAITarget | null {
+  if (cfg.textProvider === "openai") {
+    return { baseUrl: cfg.openaiBaseUrl, model: cfg.openaiModel, apiKey: cfg.openaiApiKey };
+  }
+  if (cfg.textProvider === "local") {
+    return { baseUrl: cfg.localBaseUrl, model: cfg.localModel };
+  }
+  return null;
 }
 
 /**
@@ -91,36 +110,44 @@ export async function generateText(
   req: TextRequest,
   cfg: ProviderConfig,
 ): Promise<string> {
-  if (cfg.textProvider === "local") {
-    return generateLocal(req, cfg);
+  const target = targetFor(cfg);
+  if (target) {
+    if (cfg.textProvider === "openai" && !cfg.openaiApiKey) {
+      throw new Error("OpenAI provider selected but no API key is set.");
+    }
+    return generateOpenAICompatible(req, target);
   }
   return generateGemini(req);
 }
 
-/** Quick reachability probe for the local endpoint (used in Settings UI). */
-export async function pingLocal(cfg: ProviderConfig): Promise<{
+/** Reachability + model probe for a given provider (used in Settings UI). */
+export async function pingProvider(cfg: ProviderConfig): Promise<{
   ok: boolean;
   detail: string;
 }> {
-  const base = cfg.localBaseUrl.replace(/\/+$/, "");
+  const target = targetFor(cfg);
+  if (!target) return { ok: true, detail: "Gemini (cloud) uses your app API key." };
+  const base = target.baseUrl.replace(/\/+$/, "");
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
-    const res = await fetch(`${base}/models`, { signal: ctrl.signal });
+    const headers: Record<string, string> = {};
+    if (target.apiKey) headers.Authorization = `Bearer ${target.apiKey}`;
+    const res = await fetch(`${base}/models`, { signal: ctrl.signal, headers });
     clearTimeout(timer);
-    if (!res.ok) return { ok: false, detail: `HTTP ${res.status}` };
+    if (!res.ok) return { ok: false, detail: `HTTP ${res.status} from ${base}` };
     const data = await res.json().catch(() => null);
     const ids: string[] = Array.isArray(data?.data)
       ? data.data.map((m: any) => m.id)
       : [];
-    const hasModel = ids.length === 0 || ids.includes(cfg.localModel);
+    const hasModel = ids.length === 0 || ids.includes(target.model);
     return {
       ok: true,
       detail: hasModel
-        ? `Connected. ${ids.length} model(s) available.`
-        : `Connected, but "${cfg.localModel}" not found. Available: ${ids.join(", ") || "unknown"}`,
+        ? `Connected. ${ids.length || "?"} model(s) available.`
+        : `Connected, but "${target.model}" not in the list. Available: ${ids.slice(0, 8).join(", ")}${ids.length > 8 ? "…" : ""}`,
     };
-  } catch (e) {
-    return { ok: false, detail: `Could not reach ${base}. Is the server running?` };
+  } catch {
+    return { ok: false, detail: `Could not reach ${base}. Check URL/key/server.` };
   }
 }

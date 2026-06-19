@@ -145,7 +145,27 @@ export interface Character {
   /** D&D-flavoured class. */
   charClass?: string;
   stats: CharacterStats;
+  // ---- GM / persistent character-sheet fields ----
+  /** Real-life player controlling this character (GM mode). */
+  player?: string;
+  /** Lifecycle state — drives permadeath & "true story" continuity. */
+  status?: CharacterStatus;
+  /** Free-form, evolving character-sheet notes (inventory, arc, etc.). */
+  notes?: string;
+  /** Optional level / milestone marker for progression flavour. */
+  level?: number;
 }
+
+export type CharacterStatus = "alive" | "fallen" | "retired";
+
+export const STATUS_LABELS: Record<CharacterStatus, string> = {
+  alive: "Alive",
+  fallen: "Fallen",
+  retired: "Retired",
+};
+
+export const isPlayable = (c: Character): boolean =>
+  (c.status ?? "alive") === "alive";
 
 // ---------------------------------------------------------------------------
 // STORY BEATS / PAGES
@@ -183,23 +203,38 @@ export interface ComicFace {
 }
 
 // ---------------------------------------------------------------------------
-// PROVIDER CONFIG (cloud vs local LLM)
+// PROVIDER CONFIG (multi-LLM: Gemini / OpenAI / OpenAI-compatible / local)
 // ---------------------------------------------------------------------------
-export type TextProvider = "gemini" | "local";
+export type TextProvider = "gemini" | "openai" | "local";
+
+export const TEXT_PROVIDER_LABELS: Record<TextProvider, string> = {
+  gemini: "Gemini (Cloud)",
+  openai: "OpenAI / Compatible",
+  local: "Local LLM (Private)",
+};
 
 export interface ProviderConfig {
   /** Which engine writes the story text. Images always use Gemini. */
   textProvider: TextProvider;
-  /** OpenAI-compatible base URL, e.g. http://localhost:11434/v1 (Ollama). */
+  /** OpenAI-compatible base URL for the LOCAL endpoint (e.g. Ollama). */
   localBaseUrl: string;
   /** Local model name, e.g. "llama3.1" or "mistral". */
   localModel: string;
+  /** OpenAI / OpenAI-compatible cloud base URL. */
+  openaiBaseUrl: string;
+  /** API key for the OpenAI-compatible cloud provider. */
+  openaiApiKey: string;
+  /** Cloud model name, e.g. "gpt-4o-mini", "gpt-4o", or an OpenRouter slug. */
+  openaiModel: string;
 }
 
 export const defaultProvider = (): ProviderConfig => ({
   textProvider: "gemini",
   localBaseUrl: "http://localhost:11434/v1",
   localModel: "llama3.1",
+  openaiBaseUrl: "https://api.openai.com/v1",
+  openaiApiKey: "",
+  openaiModel: "gpt-4o-mini",
 });
 
 // ---------------------------------------------------------------------------
@@ -213,6 +248,8 @@ export interface SeriesSettings {
   language: string;
   tone: string;
   novelMode: boolean;
+  /** Narrator persona id (see personas.ts), e.g. "classic" or "lootzescalation". */
+  persona?: string;
 }
 
 export type IssueStatus = "generating" | "reading" | "complete";
@@ -230,7 +267,79 @@ export interface Issue {
   status: IssueStatus;
   createdAt: number;
   updatedAt: number;
+  /** If set, this issue dramatizes a real GM campaign (the "true story"). */
+  sourceCampaignId?: string;
 }
+
+// ---------------------------------------------------------------------------
+// GM MODE: CAMPAIGNS (prep + real-session outcomes)
+// ---------------------------------------------------------------------------
+export type SceneStatus = "planned" | "played";
+
+export interface CampaignScene {
+  id: string;
+  title: string;
+  /** The GM's plan for this scene (what they intend to happen). */
+  plan: string;
+  /** NPCs / cast involved, by name. */
+  npcs: string[];
+  /** Private GM notes (secrets, twists). Never shown unless revealed. */
+  gmNotes?: string;
+  /** What ACTUALLY happened at the table — the source of the true story. */
+  outcome?: string;
+  status: SceneStatus;
+}
+
+export type CampaignResult = "ongoing" | "victory" | "defeat" | "mixed";
+
+export const RESULT_LABELS: Record<CampaignResult, string> = {
+  ongoing: "Ongoing",
+  victory: "Victory",
+  defeat: "Defeat / TPK",
+  mixed: "Bittersweet",
+};
+
+export interface Campaign {
+  id: string;
+  title: string;
+  premise: string;
+  scenes: CampaignScene[];
+  result: CampaignResult;
+  /** The true ending in the GM's words. */
+  resultNotes?: string;
+  /** Character ids who fell this campaign (drives permadeath). */
+  casualties: string[];
+  /** Issue ids forged from this campaign. */
+  forgedIssueIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// AUDIO (narration + music underscore)
+// ---------------------------------------------------------------------------
+export type TtsProvider = "off" | "local" | "elevenlabs";
+export type MusicProvider = "off" | "ambient" | "lyria";
+
+export interface AudioConfig {
+  /** Narration: read captions/dialogue aloud as pages turn. */
+  tts: TtsProvider;
+  /** Local (Web Speech) voice name, if chosen. */
+  localVoice?: string;
+  /** ElevenLabs API key (kept only in the local browser store). */
+  elevenApiKey?: string;
+  /** ElevenLabs voice id. */
+  elevenVoiceId?: string;
+  /** Background music underscore. */
+  music: MusicProvider;
+  musicVolume: number; // 0..1
+}
+
+export const defaultAudio = (): AudioConfig => ({
+  tts: "off",
+  music: "off",
+  musicVolume: 0.35,
+});
 
 export interface Series {
   id: string;
@@ -242,6 +351,15 @@ export interface Series {
   issues: Issue[];
   createdAt: number;
   updatedAt: number;
+  // ---- GM mode ----
+  /** Run as a Game Master campaign workspace. */
+  gmMode?: boolean;
+  /** When on, fallen characters stay fallen across the saga. */
+  permadeath?: boolean;
+  /** Prepared / played campaigns. */
+  campaigns?: Campaign[];
+  /** Audio preferences for this saga. */
+  audio?: AudioConfig;
 }
 
 // Lightweight summary used by the library grid (no heavy image payloads).
@@ -253,6 +371,8 @@ export interface SeriesSummary {
   castCount: number;
   style: string;
   safeMode: boolean;
+  gmMode?: boolean;
+  campaignCount?: number;
   updatedAt: number;
 }
 

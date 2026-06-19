@@ -72,6 +72,8 @@ function summarize(s: Series): SeriesSummary {
     castCount: s.cast.length,
     style: s.settings.style,
     safeMode: s.safeMode,
+    gmMode: s.gmMode,
+    campaignCount: s.campaigns?.length ?? 0,
     updatedAt: s.updatedAt,
   };
 }
