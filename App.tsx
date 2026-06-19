@@ -1,478 +1,652 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
-*/
+ */
 
-import React, { useState, useRef } from 'react';
-import { GoogleGenAI } from '@google/genai';
-import jsPDF from 'jspdf';
-import { MAX_STORY_PAGES, BACK_COVER_PAGE, TOTAL_PAGES, INITIAL_PAGES, BATCH_SIZE, DECISION_PAGES, GENRES, TONES, LANGUAGES, ComicFace, Beat, Persona, StorySettings } from './types';
-import { Setup } from './Setup';
-import { Book } from './Book';
-import { useApiKey } from './useApiKey';
-import { ApiKeyDialog } from './ApiKeyDialog';
+import React, { useEffect, useRef, useState } from "react";
+import jsPDF from "jspdf";
+import {
+  AudioConfig,
+  ComicFace,
+  DECISION_PAGES,
+  defaultAudio,
+  defaultProvider,
+  Issue,
+  MAX_STORY_PAGES,
+  Series,
+  SeriesSummary,
+  TONES,
+  LANGUAGES,
+  uid,
+} from "./types";
+import { Setup } from "./Setup";
+import { Book } from "./Book";
+import { Home } from "./Home";
+import { GMStudio } from "./GMStudio";
+import { useApiKey } from "./useApiKey";
+import { ApiKeyDialog } from "./ApiKeyDialog";
+import {
+  buildCampaignCanon,
+  EngineContext,
+  generateBeat,
+  generatePanelImage,
+  generatePortrait,
+  isAuthError,
+  summarizeIssue,
+} from "./engine";
+import {
+  deleteSeries,
+  listSeries,
+  loadSeries,
+  saveSeries,
+} from "./storage";
+import { narrate, startMusic, stopMusic, stopNarration } from "./audio";
 
-// --- Constants ---
-const MODEL_V3 = "gemini-3-pro-image-preview";
-const MODEL_IMAGE_GEN_NAME = MODEL_V3;
-const MODEL_TEXT_NAME = MODEL_V3;
+type Screen = "home" | "setup" | "reader" | "gm";
+
+const newSeries = (): Series => ({
+  id: uid(),
+  title: "Untitled Saga",
+  cast: [],
+  settings: {
+    style: "Classic Comic",
+    setting: "A bustling fantasy city on the edge of adventure",
+    audience: "kids",
+    language: LANGUAGES[0].code,
+    tone: TONES[6],
+    novelMode: false,
+  },
+  safeMode: true,
+  provider: defaultProvider(),
+  issues: [],
+  gmMode: false,
+  permadeath: false,
+  campaigns: [],
+  audio: defaultAudio(),
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+});
+
+// Build the page layout for a fresh issue. True-story (campaign) issues skip
+// the branching decision pages so the comic tells exactly what happened.
+const buildIssueFaces = (issueNumber: number, withDecisions: boolean): ComicFace[] => {
+  const hasRecap = issueNumber > 1;
+  const faces: ComicFace[] = [];
+  let idx = 0;
+  faces.push({ id: `i${issueNumber}-cover`, type: "cover", choices: [], isLoading: true, pageIndex: idx++ });
+  if (hasRecap)
+    faces.push({ id: `i${issueNumber}-recap`, type: "recap", choices: [], isLoading: true, pageIndex: idx++ });
+  for (let b = 1; b <= MAX_STORY_PAGES; b++) {
+    faces.push({
+      id: `i${issueNumber}-p${b}`,
+      type: "story",
+      choices: [],
+      isLoading: false,
+      pageIndex: idx++,
+      beatNum: b,
+      isDecisionPage: withDecisions && DECISION_PAGES.includes(b),
+    });
+  }
+  faces.push({ id: `i${issueNumber}-back`, type: "back_cover", choices: [], isLoading: true, pageIndex: idx++ });
+  return faces;
+};
 
 const App: React.FC = () => {
-  // --- API Key Hook ---
   const { validateApiKey, setShowApiKeyDialog, showApiKeyDialog, handleApiKeyDialogContinue } = useApiKey();
 
-  const [hero, setHeroState] = useState<Persona | null>(null);
-  const [friend, setFriendState] = useState<Persona | null>(null);
-  const [villain, setVillainState] = useState<Persona | null>(null);
-  const [storySettings, setStorySettings] = useState<StorySettings>({ style: "Classic Comic", setting: "Metropolis", audienceAge: "Teen" });
-  
-  // Backwards compat state
-  const [selectedLanguage, setSelectedLanguage] = useState(LANGUAGES[0].code);
-  const [storyTone, setStoryTone] = useState(TONES[0]);
-  const [richMode, setRichMode] = useState(true);
-  
-  const heroRef = useRef<Persona | null>(null);
-  const friendRef = useRef<Persona | null>(null);
-  const villainRef = useRef<Persona | null>(null);
-
-  const setHero = (p: Persona | null) => { setHeroState(p); heroRef.current = p; };
-  const setFriend = (p: Persona | null) => { setFriendState(p); friendRef.current = p; };
-  const setVillain = (p: Persona | null) => { setVillainState(p); villainRef.current = p; };
-  
+  const [screen, setScreen] = useState<Screen>("home");
+  const [library, setLibrary] = useState<SeriesSummary[]>([]);
+  const [series, setSeries] = useState<Series>(newSeries());
+  const [activeIssueId, setActiveIssueId] = useState<string | null>(null);
   const [comicFaces, setComicFaces] = useState<ComicFace[]>([]);
   const [currentSheetIndex, setCurrentSheetIndex] = useState(0);
-  const [isStarted, setIsStarted] = useState(false);
-  
-  // --- Transition States ---
-  const [showSetup, setShowSetup] = useState(true);
   const [isTransitioning, setIsTransitioning] = useState(false);
 
-  const generatingPages = useRef(new Set<number>());
-  const historyRef = useRef<ComicFace[]>([]);
+  // Refs for use inside async generation closures.
+  const seriesRef = useRef<Series>(series);
+  const facesRef = useRef<ComicFace[]>([]);
+  const activeIssueRef = useRef<string | null>(null);
+  const generatingBeats = useRef<Set<number>>(new Set());
 
-  // --- AI Helpers ---
-  // Helper to always get a fresh instance with the selected key
-  const getAI = () => {
-    return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  seriesRef.current = series;
+  activeIssueRef.current = activeIssueId;
+
+  const audioCfg: AudioConfig = series.audio ?? defaultAudio();
+
+  useEffect(() => {
+    setLibrary(listSeries());
+  }, []);
+
+  // ----- Audio: music underscore while reading -----
+  useEffect(() => {
+    if (screen === "reader" && audioCfg.music !== "off") startMusic(audioCfg);
+    else stopMusic();
+    return () => stopMusic();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, audioCfg.music]);
+
+  // ----- Audio: narrate the page you just turned to -----
+  useEffect(() => {
+    if (screen !== "reader") {
+      stopNarration();
+      return;
+    }
+    if (audioCfg.tts === "off") {
+      stopNarration();
+      return;
+    }
+    const ordered = [...comicFaces].sort((a, b) => (a.pageIndex || 0) - (b.pageIndex || 0));
+    const face = ordered[currentSheetIndex * 2];
+    const text = `${face?.narrative?.caption || ""}. ${face?.narrative?.dialogue || ""}`.trim();
+    if (text.length > 2) narrate(text, audioCfg, series.settings.language);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSheetIndex, screen]);
+
+  useEffect(() => () => { stopNarration(); stopMusic(); }, []);
+
+  // ----- Engine context -----
+  const buildCtx = (issueNumber: number): EngineContext => {
+    const s = seriesRef.current;
+    const issue = s.issues.find((i) => i.id === activeIssueRef.current);
+    const campaign = issue?.sourceCampaignId
+      ? s.campaigns?.find((c) => c.id === issue.sourceCampaignId)
+      : undefined;
+    const priorSynopses = s.issues
+      .filter((i) => i.number < issueNumber && i.synopsis)
+      .sort((a, b) => a.number - b.number)
+      .map((i) => i.synopsis as string);
+    return {
+      series: s,
+      priorSynopses,
+      issueNumber,
+      campaignCanon: campaign ? buildCampaignCanon(s, campaign) : undefined,
+    };
   };
 
-  const handleAPIError = (e: any) => {
-    const msg = String(e);
-    console.error("API Error:", msg);
-    if (
-      msg.includes('Requested entity was not found') || 
-      msg.includes('API_KEY_INVALID') || 
-      msg.toLowerCase().includes('permission denied')
-    ) {
-      setShowApiKeyDialog(true);
-    }
+  const handleAuth = (e: unknown) => {
+    if (isAuthError(e)) setShowApiKeyDialog(true);
   };
 
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve((reader.result as string).split(',')[1]);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
+  // ----- Face state helpers -----
+  const updateFace = (id: string, updates: Partial<ComicFace>) => {
+    setComicFaces((prev) => prev.map((f) => (f.id === id ? { ...f, ...updates } : f)));
+    const i = facesRef.current.findIndex((f) => f.id === id);
+    if (i !== -1) facesRef.current[i] = { ...facesRef.current[i], ...updates };
   };
 
-  const generateBeat = async (history: ComicFace[], isRightPage: boolean, pageNum: number, isDecisionPage: boolean): Promise<Beat> => {
-    if (!heroRef.current) throw new Error("No Hero");
-
-    const isFinalPage = pageNum === MAX_STORY_PAGES;
-    const langName = LANGUAGES.find(l => l.code === selectedLanguage)?.name || "English";
-
-    // Get relevant history and last focus to prevent repetition
-    const relevantHistory = history
-        .filter(p => p.type === 'story' && p.narrative && (p.pageIndex || 0) < pageNum)
-        .sort((a, b) => (a.pageIndex || 0) - (b.pageIndex || 0));
-
-    const lastBeat = relevantHistory[relevantHistory.length - 1]?.narrative;
-    const lastFocus = lastBeat?.focus_char || 'none';
-
-    const historyText = relevantHistory.map(p => 
-      `[Page ${p.pageIndex}] [Focus: ${p.narrative?.focus_char}] (Caption: "${p.narrative?.caption || ''}") (Dialogue: "${p.narrative?.dialogue || ''}") (Scene: ${p.narrative?.scene}) ${p.resolvedChoice ? `-> USER CHOICE: "${p.resolvedChoice}"` : ''}`
-    ).join('\n');
-
-    // Aggressive Co-Star and Villain Injection Logic
-    let friendInstruction = "Not yet introduced.";
-    if (friendRef.current) friendInstruction = "ACTIVE and PRESENT. Woven into the scene.";
-    
-    let villainInstruction = "Not yet introduced or lurking in shadows.";
-    if (villainRef.current) villainInstruction = "THE MAIN ANTAGONIST. Active threat.";
-
-    // Determine Core Story Driver (Genre vs Custom Premise)
-    let coreDriver = `STYLE: ${storySettings.style}. SETTING: ${storySettings.setting}. TARGET AUDIENCE: ${storySettings.audienceAge}. TONE: ${storyTone}.`;
-
-    
-    const isSliceOfLife = selectedGenre.includes("Comedy") || selectedGenre.includes("Teen") || selectedGenre.includes("Slice");
-
-    // Guardrails to prevent everything becoming "Quantum Sci-Fi"
-    const guardrails = `
-    NEGATIVE CONSTRAINTS:
-    1. UNLESS GENRE IS "Dark Sci-Fi" OR "Superhero Action" OR "Custom": DO NOT use technical jargon like "Quantum", "Timeline", "Portal", "Multiverse", or "Singularity".
-    2. IF GENRE IS "Teen Drama" OR "Lighthearted Comedy": The "stakes" must be SOCIAL, EMOTIONAL, or PERSONAL (e.g., a rumor, a competition, a broken promise, being late, embarrassing oneself). Do NOT make it life-or-death. Keep it grounded.
-    3. Avoid "The artifact" or "The device" unless established earlier.
-    `;
-
-    // BASE INSTRUCTION: Strictly enforce language for output text.
-    let instruction = `Continue the story. ALL OUTPUT TEXT (Captions, Dialogue, Choices) MUST BE IN ${langName.toUpperCase()}. ${coreDriver} ${guardrails}`;
-    if (richMode) {
-        instruction += " RICH/NOVEL MODE ENABLED. Prioritize deeper character thoughts, descriptive captions, and meaningful dialogue exchanges over short punchlines.";
+  const persist = async (extra?: Partial<Issue>) => {
+    const s = seriesRef.current;
+    const issueId = activeIssueRef.current;
+    if (!issueId) {
+      await saveSeries(s);
+      setLibrary(listSeries());
+      return;
     }
+    const issues = s.issues.map((i) =>
+      i.id === issueId
+        ? { ...i, faces: [...facesRef.current], updatedAt: Date.now(), ...extra }
+        : i,
+    );
+    const updated = { ...s, issues };
+    seriesRef.current = updated;
+    setSeries(updated);
+    await saveSeries(updated);
+    setLibrary(listSeries());
+  };
 
-    if (isFinalPage) {
-        instruction += " FINAL PAGE. KARMIC CLIFFHANGER REQUIRED. You MUST explicitly reference the User's choice from PAGE 3 in the narrative and show how that specific philosophy led to this conclusion. Text must end with 'TO BE CONTINUED...' (or localized equivalent).";
-    } else if (isDecisionPage) {
-        instruction += " End with a PSYCHOLOGICAL choice about VALUES, RELATIONSHIPS, or RISK. (e.g., Truth vs. Safety, Forgive vs. Avenge). The options must NOT be simple physical actions like 'Go Left'.";
-    } else {
-        // Neutralized Narrative Arc to avoid forcing "scary mystery" tones if the genre doesn't call for it.
-        if (pageNum === 1) {
-            instruction += " INCITING INCIDENT. An event disrupts the status quo. Establish the genre's intended mood. (If Slice of Life: A social snag/surprise. If Adventure: A call to action).";
-        } else if (pageNum <= 4) {
-            instruction += " RISING ACTION. The heroes engage with the new situation. Focus on dialogue, character dynamics, and initial challenges.";
-        } else if (pageNum <= 8) {
-            instruction += " COMPLICATION. A twist occurs! A secret is revealed, a misunderstanding deepens, or the path is blocked. (Keep intensity appropriate to Genre - e.g. Social awkwardness for Comedy, Danger for Horror).";
-        } else {
-            instruction += " CLIMAX. The confrontation with the main conflict. The truth comes out, the contest ends, or the battle is fought.";
-        }
-    }
+  // ----- Generation -----
+  const currentIssue = (): Issue | undefined =>
+    seriesRef.current.issues.find((i) => i.id === activeIssueRef.current);
+  const currentIssueNumber = (): number => currentIssue()?.number ?? 1;
 
-    // Dynamic text limits based on richMode
-    const capLimit = richMode ? "max 35 words. Detailed narration or internal monologue" : "max 15 words";
-    const diaLimit = richMode ? "max 30 words. Rich, character-driven speech" : "max 12 words";
+  const beatHistory = (beforeBeat: number) =>
+    facesRef.current
+      .filter((f) => f.type === "story" && f.narrative && (f.beatNum || 0) < beforeBeat)
+      .map((f) => ({
+        pageIndex: f.beatNum || 0,
+        beat: f.narrative!,
+        resolvedChoice: f.resolvedChoice,
+      }));
 
-    const prompt = `
-You are writing a comic book script. PAGE ${pageNum} of ${MAX_STORY_PAGES}.
-TARGET LANGUAGE FOR TEXT: ${langName} (CRITICAL: CAPTIONS, DIALOGUE, CHOICES MUST BE IN THIS LANGUAGE).
-${coreDriver}
-
-CHARACTERS:
-- HERO: Active.
-- CO-STAR: ${friendInstruction}
-- VILLAIN: ${villainInstruction}
-
-PREVIOUS PANELS (READ CAREFULLY):
-${historyText.length > 0 ? historyText : "Start the adventure."}
-
-RULES:
-1. NO REPETITION. Do not use the same captions or dialogue from previous pages.
-2. IF CO-STAR IS ACTIVE, THEY MUST APPEAR FREQUENTLY.
-3. VARIETY. If page ${pageNum-1} was an action shot, make this one a reaction or wide shot.
-4. LANGUAGE: All user-facing text MUST be in ${langName}.
-5. Avoid saying "CO-star", "villain" and "hero" in text captions. Use names if established.
-
-INSTRUCTION: ${instruction}
-
-OUTPUT STRICT JSON ONLY (No markdown formatting):
-{
-  "caption": "Unique narrator text in ${langName}. (${capLimit}).",
-  "dialogue": "Unique speech in ${langName}. (${diaLimit}). Optional.",
-  "scene": "Vivid visual description (ALWAYS IN ENGLISH for the artist model). MUST mention 'HERO', 'CO-STAR', or 'VILLAIN' if they are present.",
-  "focus_char": "hero" OR "friend" OR "villain" OR "other",
-  "choices": ["Option A in ${langName}", "Option B in ${langName}"] (Only if decision page)
-}
-`;
+  const generateStoryBeat = async (face: ComicFace) => {
+    const beatNum = face.beatNum!;
+    const ctx = buildCtx(currentIssueNumber());
+    updateFace(face.id, { isLoading: true });
     try {
-        const ai = getAI();
-        const res = await ai.models.generateContent({ model: MODEL_TEXT_NAME, contents: prompt, config: { responseMimeType: 'application/json' } });
-        let rawText = res.text || "{}";
-        rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-        
-        const parsed = JSON.parse(rawText);
-        
-        if (parsed.dialogue) parsed.dialogue = parsed.dialogue.replace(/^[\w\s\-]+:\s*/i, '').replace(/["']/g, '').trim();
-        if (parsed.caption) parsed.caption = parsed.caption.replace(/^[\w\s\-]+:\s*/i, '').trim();
-        if (!isDecisionPage) parsed.choices = [];
-        if (isDecisionPage && !isFinalPage && (!parsed.choices || parsed.choices.length < 2)) parsed.choices = ["Option A", "Option B"];
-        if (!['hero', 'friend', 'villain', 'other'].includes(parsed.focus_char)) parsed.focus_char = 'hero';
-
-        return parsed as Beat;
+      const beat = await generateBeat(ctx, {
+        history: beatHistory(beatNum),
+        pageNum: beatNum,
+        isDecisionPage: !!face.isDecisionPage,
+      });
+      updateFace(face.id, { narrative: beat, choices: beat.choices });
+      const url = await generatePanelImage(ctx, beat, "story");
+      updateFace(face.id, { imageUrl: url, isLoading: false, error: !url });
     } catch (e) {
-        console.error("Beat generation failed", e);
-        handleAPIError(e);
-        return { 
-            caption: pageNum === 1 ? "It began..." : "...", 
-            scene: `Generic scene for page ${pageNum}.`, 
-            focus_char: 'hero', 
-            choices: [] 
-        };
+      handleAuth(e);
+      updateFace(face.id, { isLoading: false, error: true });
     }
   };
 
-  const generatePersona = async (desc: string): Promise<Persona> => {
-      const style = storySettings.style || "Modern American comic book art";
+  const generateFrom = async (start: number) => {
+    for (let b = start; b <= MAX_STORY_PAGES; b++) {
+      if (generatingBeats.current.has(b)) continue;
+      const face = facesRef.current.find((f) => f.type === "story" && f.beatNum === b);
+      if (!face) continue;
+      if (face.imageUrl) {
+        if (face.isDecisionPage && !face.resolvedChoice) break;
+        continue;
+      }
+      generatingBeats.current.add(b);
       try {
-          const ai = getAI();
-          const res = await ai.models.generateContent({
-              model: MODEL_IMAGE_GEN_NAME,
-              contents: { text: `STYLE: Masterpiece ${style} character sheet, detailed ink, neutral background. FULL BODY. Character: ${desc}` },
-              config: { imageConfig: { aspectRatio: '1:1' } }
-          });
-          const part = res.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-          if (part?.inlineData?.data) return { base64: part.inlineData.data, desc };
-          throw new Error("Failed");
-      } catch (e) { 
-        handleAPIError(e);
-        throw e; 
-      }
-  };
-
-  const generateImage = async (beat: Beat, type: ComicFace['type']): Promise<string> => {
-    const contents = [];
-    if (heroRef.current?.base64) {
-        contents.push({ text: "REFERENCE 1 [HERO]:" });
-        contents.push({ inlineData: { mimeType: 'image/jpeg', data: heroRef.current.base64 } });
-    }
-    if (friendRef.current?.base64) {
-        contents.push({ text: "REFERENCE 2 [CO-STAR]:" });
-        contents.push({ inlineData: { mimeType: 'image/jpeg', data: friendRef.current.base64 } });
-    }
-    if (villainRef.current?.base64) {
-        contents.push({ text: "REFERENCE 3 [VILLAIN]:" });
-        contents.push({ inlineData: { mimeType: 'image/jpeg', data: villainRef.current.base64 } });
-    }
-
-    const styleEra = storySettings.style || "Modern American";
-    let promptText = `STYLE: ${styleEra} comic book art, detailed ink, vibrant colors. `;
-    
-    if (type === 'cover') {
-        const langName = LANGUAGES.find(l => l.code === selectedLanguage)?.name || "English";
-        promptText += `TYPE: Comic Book Cover. TITLE: "INFINITE HEROES" (OR LOCALIZED TRANSLATION IN ${langName.toUpperCase()}). Main visual: Dynamic action shot of [HERO] (Use REFERENCE 1).`;
-    } else if (type === 'back_cover') {
-        promptText += `TYPE: Comic Back Cover. FULL PAGE VERTICAL ART. Dramatic teaser. Text: "NEXT ISSUE SOON".`;
-    } else {
-        promptText += `TYPE: Vertical comic panel. SCENE: ${beat.scene}. `;
-        promptText += `INSTRUCTIONS: Maintain strict character likeness. If scene mentions 'HERO', you MUST use REFERENCE 1. If scene mentions 'CO-STAR', you MUST use REFERENCE 2. If 'VILLAIN', use REFERENCE 3.`;
-        
-        if (beat.caption) promptText += ` INCLUDE CAPTION BOX: "${beat.caption}"`;
-        if (beat.dialogue) promptText += ` INCLUDE SPEECH BUBBLE: "${beat.dialogue}"`;
-    }
-
-    contents.push({ text: promptText });
-
-    try {
-        const ai = getAI();
-        const res = await ai.models.generateContent({
-          model: MODEL_IMAGE_GEN_NAME,
-          contents: contents,
-          config: { imageConfig: { aspectRatio: '2:3' } }
-        });
-        const part = res.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-        return part?.inlineData?.data ? `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` : '';
-    } catch (e) { 
-        handleAPIError(e);
-        return ''; 
-    }
-  };
-
-  const updateFaceState = (id: string, updates: Partial<ComicFace>) => {
-      setComicFaces(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
-      const idx = historyRef.current.findIndex(f => f.id === id);
-      if (idx !== -1) historyRef.current[idx] = { ...historyRef.current[idx], ...updates };
-  };
-
-  const generateSinglePage = async (faceId: string, pageNum: number, type: ComicFace['type']) => {
-      const isDecision = DECISION_PAGES.includes(pageNum);
-      let beat: Beat = { scene: "", choices: [], focus_char: 'other' };
-
-      if (type === 'cover') {
-           // Cover beat is handled in generateImage
-      } else if (type === 'back_cover') {
-           beat = { scene: "Thematic teaser image", choices: [], focus_char: 'other' };
-      } else {
-           beat = await generateBeat(historyRef.current, pageNum % 2 === 0, pageNum, isDecision);
-      }
-
-      if (beat.focus_char === 'friend' && !friendRef.current && type === 'story') {
-          try {
-              const newSidekick = await generatePersona(`Sidekick fitting for ${storySettings.style} and ${storySettings.setting}.`);
-              setFriend(newSidekick);
-          } catch (e) { beat.focus_char = 'other'; }
-      }
-
-      updateFaceState(faceId, { narrative: beat, choices: beat.choices, isDecisionPage: isDecision });
-      const url = await generateImage(beat, type);
-      updateFaceState(faceId, { imageUrl: url, isLoading: false });
-  };
-
-  const generateBatch = async (startPage: number, count: number) => {
-      const pagesToGen: number[] = [];
-      for (let i = 0; i < count; i++) {
-          const p = startPage + i;
-          if (p <= TOTAL_PAGES && !generatingPages.current.has(p)) {
-              pagesToGen.push(p);
-          }
-      }
-      
-      if (pagesToGen.length === 0) return;
-      pagesToGen.forEach(p => generatingPages.current.add(p));
-
-      const newFaces: ComicFace[] = [];
-      pagesToGen.forEach(pageNum => {
-          const type = pageNum === BACK_COVER_PAGE ? 'back_cover' : 'story';
-          newFaces.push({ id: `page-${pageNum}`, type, choices: [], isLoading: true, pageIndex: pageNum });
-      });
-
-      setComicFaces(prev => {
-          const existing = new Set(prev.map(f => f.id));
-          return [...prev, ...newFaces.filter(f => !existing.has(f.id))];
-      });
-      newFaces.forEach(f => { if (!historyRef.current.find(h => h.id === f.id)) historyRef.current.push(f); });
-
-      try {
-          for (const pageNum of pagesToGen) {
-               await generateSinglePage(`page-${pageNum}`, pageNum, pageNum === BACK_COVER_PAGE ? 'back_cover' : 'story');
-               generatingPages.current.delete(pageNum);
-          }
-      } catch (e) {
-          console.error("Batch generation error", e);
+        await generateStoryBeat(face);
       } finally {
-          pagesToGen.forEach(p => generatingPages.current.delete(p));
+        generatingBeats.current.delete(b);
       }
-  }
-
-  const launchStory = async () => {
-    // --- API KEY VALIDATION ---
-    const hasKey = await validateApiKey();
-    if (!hasKey) return; // Stop if cancelled or invalid
-    
-    if (!heroRef.current) return;
-    
-    setIsTransitioning(true);
-    
-    let availableTones = TONES;
-    if (storySettings.style.toLowerCase().includes("comedy") || storySettings.audienceAge.toLowerCase() === "teen") {
-        availableTones = TONES.filter(t => t.includes("CASUAL") || t.includes("WHOLESOME") || t.includes("QUIPPY"));
-    } else if (storySettings.style.toLowerCase().includes("horror")) {
-        availableTones = TONES.filter(t => t.includes("INNER-MONOLOGUE") || t.includes("OPERATIC"));
+      await persist();
+      if (face.isDecisionPage) break;
     }
-    
-    setStoryTone(availableTones[Math.floor(Math.random() * availableTones.length)]);
-
-    const coverFace: ComicFace = { id: 'cover', type: 'cover', choices: [], isLoading: true, pageIndex: 0 };
-    setComicFaces([coverFace]);
-    historyRef.current = [coverFace];
-    generatingPages.current.add(0);
-
-    generateSinglePage('cover', 0, 'cover').finally(() => generatingPages.current.delete(0));
-    
-    setTimeout(async () => {
-        setIsStarted(true);
-        setShowSetup(false);
-        setIsTransitioning(false);
-        await generateBatch(1, INITIAL_PAGES);
-        generateBatch(3, 3);
-    }, 1100);
+    await maybeFinishIssue();
+    await persist();
   };
 
-  const regenerateFace = async (pageIndex: number, newCaption: string, newDialogue: string) => {
-    updateFaceState(`page-${pageIndex}`, { isLoading: true });
-    
-    // Update the face narrative in historyRef
-    const faceIndex = historyRef.current.findIndex(f => f.pageIndex === pageIndex);
-    if (faceIndex !== -1 && historyRef.current[faceIndex].narrative) {
-       historyRef.current[faceIndex].narrative!.caption = newCaption;
-       historyRef.current[faceIndex].narrative!.dialogue = newDialogue;
-    }
-    
-    const face = comicFaces.find(f => f.pageIndex === pageIndex);
-    if (!face || !face.narrative) return;
-    
-    const updatedFace = { ...face, isLoading: true, narrative: { ...face.narrative, caption: newCaption, dialogue: newDialogue } };
-    setComicFaces(prev => prev.map(f => f.pageIndex === pageIndex ? updatedFace : f));
-    
+  const generateCover = async () => {
+    const ctx = buildCtx(currentIssueNumber());
+    const cover = facesRef.current.find((f) => f.type === "cover");
+    if (!cover) return;
     try {
-        const imageUrl = await generateImage(updatedFace.narrative, 'story');
-        updateFaceState(`page-${pageIndex}`, { imageUrl, isLoading: false });
+      const url = await generatePanelImage(ctx, { scene: "", choices: [] }, "cover");
+      updateFace(cover.id, { imageUrl: url, isLoading: false, error: !url });
     } catch (e) {
-        console.error("Redraw failed", e);
-        updateFaceState(`page-${pageIndex}`, { isLoading: false });
+      handleAuth(e);
+      updateFace(cover.id, { isLoading: false, error: true });
     }
   };
 
-  const handleChoice = async (pageIndex: number, choice: string) => {
-      updateFaceState(`page-${pageIndex}`, { resolvedChoice: choice });
-      const maxPage = Math.max(...historyRef.current.map(f => f.pageIndex || 0));
-      if (maxPage + 1 <= TOTAL_PAGES) {
-          generateBatch(maxPage + 1, BATCH_SIZE);
+  const generateRecap = async () => {
+    const ctx = buildCtx(currentIssueNumber());
+    const recap = facesRef.current.find((f) => f.type === "recap");
+    if (!recap) return;
+    const text = ctx.priorSynopses.length
+      ? ctx.priorSynopses[ctx.priorSynopses.length - 1]
+      : "Our heroes' journey continues...";
+    try {
+      const url = await generatePanelImage(ctx, { scene: "", choices: [] }, "recap");
+      updateFace(recap.id, { imageUrl: url, recapText: text, isLoading: false });
+    } catch (e) {
+      handleAuth(e);
+      updateFace(recap.id, { recapText: text, isLoading: false, error: true });
+    }
+  };
+
+  const maybeFinishIssue = async () => {
+    const stories = facesRef.current.filter((f) => f.type === "story");
+    const allDone = stories.length > 0 && stories.every((f) => f.imageUrl || f.error);
+    if (!allDone) return;
+
+    const back = facesRef.current.find((f) => f.type === "back_cover");
+    const ctx = buildCtx(currentIssueNumber());
+
+    const issue = currentIssue();
+    if (issue && !issue.synopsis) {
+      try {
+        const synopsis = await summarizeIssue(
+          ctx,
+          stories
+            .filter((f) => f.narrative)
+            .map((f) => ({
+              pageIndex: f.beatNum || 0,
+              beat: f.narrative!,
+              resolvedChoice: f.resolvedChoice,
+            })),
+        );
+        if (synopsis) await persist({ synopsis, status: "complete" });
+      } catch (e) {
+        handleAuth(e);
       }
-  }
+    }
 
-  const resetApp = () => {
-      setIsStarted(false);
-      setShowSetup(true);
-      setComicFaces([]);
-      setCurrentSheetIndex(0);
-      historyRef.current = [];
-      generatingPages.current.clear();
-      setHero(null);
-      setFriend(null);
+    if (back && !back.imageUrl && !back.error) {
+      try {
+        const url = await generatePanelImage(ctx, { scene: "", choices: [] }, "back_cover");
+        updateFace(back.id, { imageUrl: url, isLoading: false, error: !url });
+      } catch (e) {
+        handleAuth(e);
+        updateFace(back.id, { isLoading: false, error: true });
+      }
+    }
   };
 
-  const downloadPDF = () => {
-    const PAGE_WIDTH = 480;
-    const PAGE_HEIGHT = 720;
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [PAGE_WIDTH, PAGE_HEIGHT] });
-    const pagesToPrint = comicFaces.filter(face => face.imageUrl && !face.isLoading).sort((a, b) => (a.pageIndex || 0) - (b.pageIndex || 0));
+  // ----- Launching issues -----
+  const launchIssue = async (issueNumber: number, withDecisions: boolean) => {
+    const faces = buildIssueFaces(issueNumber, withDecisions);
+    facesRef.current = faces;
+    generatingBeats.current.clear();
+    setComicFaces(faces);
+    setCurrentSheetIndex(0);
+    setScreen("reader");
+    setIsTransitioning(false);
 
-    pagesToPrint.forEach((face, index) => {
-        if (index > 0) doc.addPage([PAGE_WIDTH, PAGE_HEIGHT], 'portrait');
-        if (face.imageUrl) doc.addImage(face.imageUrl, 'JPEG', 0, 0, PAGE_WIDTH, PAGE_HEIGHT);
-    });
-    doc.save('Infinite-Heroes-Issue.pdf');
+    generateCover();
+    if (issueNumber > 1) generateRecap();
+    await generateFrom(1);
   };
 
-  const handleHeroUpload = async (file: File) => {
-       try { const base64 = await fileToBase64(file); setHero({ base64, desc: "The Main Hero" }); } catch (e) { alert("Hero upload failed"); }
+  const startNewSaga = async () => {
+    const s = seriesRef.current;
+    if (s.cast.filter((c) => c.role === "hero").length === 0) {
+      alert("Add at least one Hero before starting.");
+      return;
+    }
+    // GM mode: prep campaigns first, forge comics later.
+    if (s.gmMode) {
+      await saveSeries(s);
+      setLibrary(listSeries());
+      setActiveIssueId(null);
+      activeIssueRef.current = null;
+      setScreen("gm");
+      return;
+    }
+    const hasKey = await validateApiKey();
+    if (!hasKey) return;
+    setIsTransitioning(true);
+    const issueId = uid();
+    const issue: Issue = {
+      id: issueId, number: 1, title: `${s.title} — Issue #1`,
+      faces: [], choiceLog: [], status: "generating",
+      createdAt: Date.now(), updatedAt: Date.now(),
+    };
+    const updated: Series = { ...s, issues: [issue] };
+    seriesRef.current = updated;
+    setSeries(updated);
+    setActiveIssueId(issueId);
+    activeIssueRef.current = issueId;
+    await saveSeries(updated);
+    setTimeout(() => launchIssue(1, true), 1000);
   };
-  const handleFriendUpload = async (file: File) => {
-       try { const base64 = await fileToBase64(file); setFriend({ base64, desc: "The Sidekick/Rival" }); } catch (e) { alert("Friend upload failed"); }
+
+  const nextIssueNumber = (s: Series) => Math.max(0, ...s.issues.map((i) => i.number)) + 1;
+
+  const startNextIssue = async () => {
+    const hasKey = await validateApiKey();
+    if (!hasKey) return;
+    const s = seriesRef.current;
+    const number = nextIssueNumber(s);
+    const issueId = uid();
+    const issue: Issue = {
+      id: issueId, number, title: `${s.title} — Issue #${number}`,
+      faces: [], choiceLog: [], status: "generating",
+      createdAt: Date.now(), updatedAt: Date.now(),
+    };
+    const updated: Series = { ...s, issues: [...s.issues, issue] };
+    seriesRef.current = updated;
+    setSeries(updated);
+    setActiveIssueId(issueId);
+    activeIssueRef.current = issueId;
+    await saveSeries(updated);
+    launchIssue(number, true);
+  };
+
+  // ----- GM: forge a true-story issue from a campaign -----
+  const forgeCampaignIssue = async (campaignId: string) => {
+    const hasKey = await validateApiKey();
+    if (!hasKey) return;
+    const s = seriesRef.current;
+    const campaign = s.campaigns?.find((c) => c.id === campaignId);
+    if (!campaign) return;
+    const number = nextIssueNumber(s);
+    const issueId = uid();
+    const issue: Issue = {
+      id: issueId, number,
+      title: `${campaign.title} (Issue #${number})`,
+      faces: [], choiceLog: [], status: "generating",
+      sourceCampaignId: campaignId,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    };
+    // Apply permadeath: campaign casualties become fallen on the roster.
+    const cast = s.permadeath
+      ? s.cast.map((c) => (campaign.casualties.includes(c.id) ? { ...c, status: "fallen" as const } : c))
+      : s.cast;
+    const campaigns = (s.campaigns ?? []).map((c) =>
+      c.id === campaignId ? { ...c, forgedIssueIds: [...c.forgedIssueIds, issueId] } : c,
+    );
+    const updated: Series = { ...s, cast, campaigns, issues: [...s.issues, issue] };
+    seriesRef.current = updated;
+    setSeries(updated);
+    setActiveIssueId(issueId);
+    activeIssueRef.current = issueId;
+    await saveSeries(updated);
+    launchIssue(number, false); // true-story: no branching
+  };
+
+  const openIssue = (s: Series, issueId: string) => {
+    const issue = s.issues.find((i) => i.id === issueId);
+    if (!issue) return;
+    seriesRef.current = s;
+    setSeries(s);
+    setActiveIssueId(issueId);
+    activeIssueRef.current = issueId;
+    const faces = issue.faces.length
+      ? issue.faces
+      : buildIssueFaces(issue.number, !issue.sourceCampaignId);
+    facesRef.current = faces.map((f) => ({ ...f }));
+    setComicFaces(facesRef.current);
+    setCurrentSheetIndex(0);
+    setScreen("reader");
+    const firstMissing = facesRef.current.find((f) => f.type === "story" && !f.imageUrl && !f.error);
+    if (firstMissing) generateFrom(firstMissing.beatNum || 1);
+  };
+
+  // ----- Reader interactions -----
+  const handleChoice = async (beatNum: number, choice: string) => {
+    updateFace(`i${currentIssueNumber()}-p${beatNum}`, { resolvedChoice: choice });
+    const next = beatNum + 1;
+    await persist();
+    if (next <= MAX_STORY_PAGES) generateFrom(next);
+  };
+
+  const regenerateFace = async (beatNum: number, caption: string, dialogue: string) => {
+    const face = facesRef.current.find((f) => f.beatNum === beatNum);
+    if (!face || !face.narrative) return;
+    const newBeat = { ...face.narrative, caption, dialogue };
+    updateFace(face.id, { isLoading: true, narrative: newBeat });
+    try {
+      const url = await generatePanelImage(buildCtx(currentIssueNumber()), newBeat, "story");
+      updateFace(face.id, { imageUrl: url, isLoading: false });
+      await persist();
+    } catch (e) {
+      handleAuth(e);
+      updateFace(face.id, { isLoading: false });
+    }
   };
 
   const handleSheetClick = (index: number) => {
-      if (!isStarted) return;
-      if (index === 0 && currentSheetIndex === 0) return;
-      if (index < currentSheetIndex) setCurrentSheetIndex(index);
-      else if (index === currentSheetIndex && comicFaces.find(f => f.pageIndex === index)?.imageUrl) setCurrentSheetIndex(prev => prev + 1);
+    const sheetCount = Math.ceil(comicFaces.length / 2);
+    if (index < currentSheetIndex) setCurrentSheetIndex(index);
+    else if (index === currentSheetIndex && index < sheetCount) setCurrentSheetIndex((p) => p + 1);
   };
+
+  // ----- Audio toggles (reader toolbar) -----
+  const toggleNarration = () => {
+    const cur = series.audio ?? defaultAudio();
+    const tts = cur.tts === "off" ? (cur.elevenApiKey ? "elevenlabs" : "local") : "off";
+    const updated = { ...series, audio: { ...cur, tts } as AudioConfig };
+    seriesRef.current = updated;
+    setSeries(updated);
+    if (tts === "off") stopNarration();
+  };
+  const toggleMusic = () => {
+    const cur = series.audio ?? defaultAudio();
+    const music = cur.music === "off" ? "ambient" : "off";
+    const updated = { ...series, audio: { ...cur, music } as AudioConfig };
+    seriesRef.current = updated;
+    setSeries(updated);
+  };
+
+  // ----- Library / navigation actions -----
+  const goHome = async () => {
+    if (activeIssueRef.current) await persist();
+    stopNarration();
+    stopMusic();
+    setScreen("home");
+    setLibrary(listSeries());
+  };
+
+  const goStudio = async () => {
+    if (activeIssueRef.current) await persist();
+    stopNarration();
+    stopMusic();
+    setActiveIssueId(null);
+    activeIssueRef.current = null;
+    setScreen("gm");
+  };
+
+  const createSaga = () => {
+    const fresh = newSeries();
+    seriesRef.current = fresh;
+    setSeries(fresh);
+    setActiveIssueId(null);
+    activeIssueRef.current = null;
+    setScreen("setup");
+  };
+
+  const openSaga = async (id: string) => {
+    const s = await loadSeries(id);
+    if (!s) { alert("Could not load that saga."); return; }
+    seriesRef.current = s;
+    setSeries(s);
+    if (s.gmMode) {
+      setActiveIssueId(null);
+      activeIssueRef.current = null;
+      setScreen("gm");
+      return;
+    }
+    const latest = [...s.issues].sort((a, b) => b.number - a.number)[0];
+    if (latest) openIssue(s, latest.id);
+    else { setActiveIssueId(null); activeIssueRef.current = null; setScreen("setup"); }
+  };
+
+  const removeSaga = async (id: string) => {
+    await deleteSeries(id);
+    setLibrary(listSeries());
+  };
+
+  const onGeneratePortrait = async (description: string): Promise<string | null> => {
+    const hasKey = await validateApiKey();
+    if (!hasKey) return null;
+    try {
+      return await generatePortrait(buildCtx(1), description);
+    } catch (e) {
+      handleAuth(e);
+      alert("Portrait generation failed. Check your API key, or upload a photo instead.");
+      return null;
+    }
+  };
+
+  // GMStudio / Setup change handler. Updates state immediately and persists on
+  // a short debounce so per-keystroke edits don't hammer IndexedDB.
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onSeriesChange = (s: Series) => {
+    seriesRef.current = s;
+    setSeries(s);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveSeries(seriesRef.current).then(() => setLibrary(listSeries()));
+    }, 700);
+  };
+
+  // ----- Export -----
+  const downloadPDF = () => {
+    const W = 480, H = 720;
+    const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: [W, H] });
+    const pages = facesRef.current
+      .filter((f) => f.imageUrl && !f.isLoading)
+      .sort((a, b) => (a.pageIndex || 0) - (b.pageIndex || 0));
+    pages.forEach((face, i) => {
+      if (i > 0) doc.addPage([W, H], "portrait");
+      if (face.imageUrl) doc.addImage(face.imageUrl, "JPEG", 0, 0, W, H);
+    });
+    doc.save(`${seriesRef.current.title.replace(/\s+/g, "-")}-Issue-${currentIssueNumber()}.pdf`);
+  };
+
+  // ----- Derived UI flags -----
+  const activeIssue = series.issues.find((i) => i.id === activeIssueId);
+  const issueComplete =
+    comicFaces.length > 0 &&
+    comicFaces.filter((f) => f.type === "story").every((f) => f.imageUrl || f.error);
+  const inGmIssue = !!activeIssue?.sourceCampaignId;
 
   return (
     <div className="comic-scene">
       {showApiKeyDialog && <ApiKeyDialog onContinue={handleApiKeyDialogContinue} />}
-      
-      <Setup 
-          show={showSetup}
+
+      {screen === "home" && (
+        <Home library={library} onCreate={createSaga} onOpen={openSaga} onDelete={removeSaga} />
+      )}
+
+      {screen === "setup" && (
+        <Setup
+          series={series}
           isTransitioning={isTransitioning}
-          hero={hero}
-          friend={friend}
-          villain={villain}
-          storySettings={storySettings}
-          selectedLanguage={selectedLanguage}
-          richMode={richMode}
-          onHeroUpload={(f, s, n) => { handleHeroUpload(f); setHeroState(prev => prev ? {...prev, stats: s, name: n} : prev) }}
-          onFriendUpload={(f, s, n) => { handleFriendUpload(f); setFriendState(prev => prev ? {...prev, stats: s, name: n} : prev) }}
-          onVillainUpload={(f, s, n) => { fileToBase64(f).then(b => setVillain({ base64: b, desc: "Villain", stats: s, name: n })) }}
-          onStorySettingsChange={setStorySettings}
-          onLanguageChange={setSelectedLanguage}
-          onRichModeChange={setRichMode}
-          onLaunch={launchStory}
-      />
-      
-      <Book 
-          comicFaces={comicFaces}
-          currentSheetIndex={currentSheetIndex}
-          isStarted={isStarted}
-          isSetupVisible={showSetup && !isTransitioning}
-          onSheetClick={handleSheetClick}
-          onChoice={handleChoice}
-          onOpenBook={() => setCurrentSheetIndex(1)}
-          onDownload={downloadPDF}
-          onReset={resetApp}
-          onRegenerateFace={regenerateFace}
-      />
+          onChange={onSeriesChange}
+          onGeneratePortrait={onGeneratePortrait}
+          onLaunch={startNewSaga}
+          onBack={goHome}
+        />
+      )}
+
+      {screen === "gm" && (
+        <GMStudio
+          series={series}
+          onChange={onSeriesChange}
+          onForge={forgeCampaignIssue}
+          onOpenIssue={(issueId) => openIssue(seriesRef.current, issueId)}
+          onBack={goHome}
+          onEditRoster={() => setScreen("setup")}
+        />
+      )}
+
+      {screen === "reader" && (
+        <>
+          <div className="reader-toolbar">
+            <button className="comic-btn bg-white text-black px-3 py-1 text-sm" onClick={inGmIssue ? goStudio : goHome}>
+              {inGmIssue ? "← Studio" : "← Library"}
+            </button>
+            <span className="reader-title font-comic">
+              {series.title} · {activeIssue?.sourceCampaignId ? activeIssue.title : `Issue #${activeIssue?.number ?? 1}`}
+            </span>
+            <div className="flex items-center gap-1">
+              <button onClick={toggleNarration} title="Narration (read aloud)"
+                className={`comic-btn px-2 py-1 text-sm ${audioCfg.tts !== "off" ? "bg-green-400" : "bg-white"} text-black`}>
+                {audioCfg.tts !== "off" ? "🔊" : "🔇"}
+              </button>
+              <button onClick={toggleMusic} title="Background music"
+                className={`comic-btn px-2 py-1 text-sm ${audioCfg.music !== "off" ? "bg-green-400" : "bg-white"} text-black`}>
+                ♪
+              </button>
+              {!inGmIssue && (
+                <button className="comic-btn bg-yellow-400 text-black px-3 py-1 text-sm disabled:opacity-50"
+                  onClick={startNextIssue} disabled={!issueComplete}
+                  title={issueComplete ? "Continue the saga" : "Finish this issue first"}>
+                  + Next Issue
+                </button>
+              )}
+            </div>
+          </div>
+
+          <Book
+            comicFaces={comicFaces}
+            currentSheetIndex={currentSheetIndex}
+            isStarted={true}
+            isSetupVisible={false}
+            onSheetClick={handleSheetClick}
+            onChoice={handleChoice}
+            onOpenBook={() => setCurrentSheetIndex(1)}
+            onDownload={downloadPDF}
+            onReset={inGmIssue ? goStudio : startNextIssue}
+            onRegenerateFace={regenerateFace}
+          />
+        </>
+      )}
     </div>
   );
 };
