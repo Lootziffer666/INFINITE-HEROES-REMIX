@@ -20,6 +20,8 @@ retold as a real comic where every hero looks like a real player.
   class and backstory that flavour how each character is written.
 - **Persistent character sheets** — player name, status (alive / fallen /
   retired), notes — carried across issues.
+- **Cameos & cross-overs** — export characters as portable cards, or pull a hero
+  straight from another saga so casts can guest-star across your comics.
 - **Character consistency** — each character's portrait is reused as a
   reference image on every panel and across every issue, so faces stay stable.
 - **Locked visual style** — pick one art style for the whole saga so issues
@@ -150,10 +152,24 @@ and press **Test connection**.
 | `GMStudio.tsx` | Game Master campaign prep + true-story forging |
 | `Book.tsx` / `Panel.tsx` | The 3D flip-book reader |
 
+## 🌟 Cameos & Cross-Overs
+
+Characters are portable, self-contained cards, so heroes can guest-star across
+your comics:
+
+- **Export a cameo** (⤓ on any roster card) → a `.cameo.json` file.
+- **Export the whole party** (⤓ Export Party) → a `.crossover.json` pack.
+- **Import** a cameo or crossover file into any saga (★ Import Cameo).
+- **Cross-over** (⚡) — pull characters **straight from another saved saga** in
+  your library, no file needed. Guests are tagged with their origin saga, get a
+  ★ GUEST badge, and the story treats them as special crossover appearances.
+
+Imported files are treated as untrusted: only known fields are read, portraits
+are size-capped, and all text passes through Safe Mode moderation.
+
 ## 🗺️ Roadmap
 
-- **Cameos** — characters are self-contained, portable cards (the data model is
-  cameo-ready), so a hero can guest-star in your other comics, and eventually in
-  *other people's* comics (cross-user sharing is the next step).
+- **Cross-user cameos** — sharing cards/packs between different people's
+  libraries (the file format already supports it; a sharing flow is next).
 - **Continued character sheets & character creator** — deeper progression.
 - **Lyria real-time music** — full streaming underscore.

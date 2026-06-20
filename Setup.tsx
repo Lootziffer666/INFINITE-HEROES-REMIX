@@ -29,6 +29,7 @@ import {
 import { moderateFields } from "./safety";
 import { pingProvider } from "./llm";
 import { NARRATOR_PERSONAS } from "./personas";
+import { exportCameo, exportCrossover, readCameoFile, sanitizeGuest } from "./cameo";
 
 interface SetupProps {
   series: Series;
@@ -37,6 +38,10 @@ interface SetupProps {
   onGeneratePortrait: (description: string) => Promise<string | null>;
   onLaunch: () => void;
   onBack: () => void;
+  /** Other saved sagas available to cross over from. */
+  crossoverSources: { id: string; title: string }[];
+  /** Load the full cast of another saga for cross-over import. */
+  loadCrossoverCast: (id: string) => Promise<Character[]>;
 }
 
 const fileToBase64 = (file: File): Promise<string> =>
@@ -65,6 +70,7 @@ export const Setup: React.FC<SetupProps> = (props) => {
   const [busyPortrait, setBusyPortrait] = useState(false);
   const [pingMsg, setPingMsg] = useState<string>("");
   const [pinging, setPinging] = useState(false);
+  const [xover, setXover] = useState<{ sourceId: string; cast: Character[]; selected: string[]; loading: boolean } | null>(null);
 
   const set = (patch: Partial<Series>) => props.onChange({ ...series, ...patch });
   const setSettings = (patch: Partial<Series["settings"]>) =>
@@ -102,6 +108,75 @@ export const Setup: React.FC<SetupProps> = (props) => {
     } catch {
       alert("Could not read that image.");
     }
+  };
+
+  // Import a cameo card or crossover pack from a file. A single character opens
+  // in the editor for review; a pack of several is added straight to the cast.
+  const addGuests = (chars: Character[]) => {
+    const blocked = chars.some(
+      (c) => moderateFields([c.name, c.bio, c.description], series.safeMode).level === "block",
+    );
+    if (blocked) {
+      alert("One or more characters contain content that isn't allowed here (Safe Mode).");
+      return;
+    }
+    if (chars.length === 1) {
+      setDraft(chars[0]);
+      return;
+    }
+    set({ cast: [...series.cast, ...chars] });
+    alert(`Added ${chars.length} guest characters to your saga.`);
+  };
+
+  const importCameo = async (file: File) => {
+    try {
+      const chars = await readCameoFile(file);
+      addGuests(chars);
+    } catch (e: any) {
+      alert(e?.message || "Could not import this file.");
+    }
+  };
+
+  // ----- Cross-over: pull characters straight from another saved saga -----
+  const openCrossover = () => {
+    if (props.crossoverSources.length === 0) {
+      alert("No other sagas to cross over from yet. Create another saga first, or import a cameo file.");
+      return;
+    }
+    setXover({ sourceId: "", cast: [], selected: [], loading: false });
+  };
+
+  const pickSource = async (id: string) => {
+    setXover((x) => (x ? { ...x, sourceId: id, loading: true, cast: [], selected: [] } : x));
+    try {
+      const cast = await props.loadCrossoverCast(id);
+      setXover((x) => (x ? { ...x, cast, loading: false } : x));
+    } catch {
+      setXover((x) => (x ? { ...x, loading: false } : x));
+      alert("Could not load that saga's cast.");
+    }
+  };
+
+  const toggleXover = (id: string) =>
+    setXover((x) =>
+      x ? { ...x, selected: x.selected.includes(id) ? x.selected.filter((i) => i !== id) : [...x.selected, id] } : x,
+    );
+
+  const confirmCrossover = () => {
+    if (!xover) return;
+    const source = props.crossoverSources.find((s) => s.id === xover.sourceId);
+    const chosen = xover.cast.filter((c) => xover.selected.includes(c.id));
+    if (chosen.length === 0) return;
+    const guests = chosen.map((c) => sanitizeGuest(c, source?.title));
+    const blocked = guests.some(
+      (g) => moderateFields([g.name, g.bio, g.description], series.safeMode).level === "block",
+    );
+    if (blocked) {
+      alert("Some of those characters can't be brought in while Safe Mode is on.");
+      return;
+    }
+    set({ cast: [...series.cast, ...guests] });
+    setXover(null);
   };
 
   const genPortrait = async () => {
@@ -181,7 +256,13 @@ export const Setup: React.FC<SetupProps> = (props) => {
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h2 className="font-comic text-2xl uppercase">Your Party</h2>
-                <p className="text-sm text-gray-600 font-sans">Perfect for a whole D&amp;D group — add every hero.</p>
+                <div className="flex items-center gap-2">
+                  {series.cast.length > 0 && (
+                    <button onClick={() => exportCrossover(series.cast, series.title)} title="Export the whole party as a crossover pack"
+                      className="comic-btn bg-fuchsia-300 text-black px-2 py-1 text-xs">⤓ Export Party</button>
+                  )}
+                  <p className="text-sm text-gray-600 font-sans hidden sm:block">A whole D&amp;D group — add or cross over every hero.</p>
+                </div>
               </div>
 
               {/* Roster grid */}
@@ -189,10 +270,14 @@ export const Setup: React.FC<SetupProps> = (props) => {
                 {series.cast.map((c) => (
                   <div key={c.id} className="border-4 border-black p-2 bg-gray-50 relative">
                     <img src={`data:image/jpeg;base64,${c.portrait}`} alt={c.name} className="w-full h-28 object-cover border-2 border-black mb-1" />
+                    {c.cameoFrom && (
+                      <span className="absolute top-1 left-1 bg-fuchsia-400 text-black text-[9px] font-bold px-1 border border-black" title={`Guest from "${c.cameoFrom}"`}>★ GUEST</span>
+                    )}
                     <div className="font-comic text-lg leading-none truncate">{c.name}</div>
                     <div className="text-xs uppercase tracking-wide text-gray-600">{ROLE_LABELS[c.role]} · {c.charClass}</div>
                     <div className="flex gap-1 mt-2">
                       <button onClick={() => setDraft({ ...c })} className="flex-1 text-xs border-2 border-black bg-yellow-300 font-comic">EDIT</button>
+                      <button onClick={() => exportCameo(c, series.title)} title="Export as cameo card" className="text-xs border-2 border-black bg-fuchsia-300 px-2 font-comic">⤓</button>
                       <button onClick={() => removeChar(c.id)} className="text-xs border-2 border-black bg-red-300 px-2 font-comic">✕</button>
                     </div>
                   </div>
@@ -202,6 +287,12 @@ export const Setup: React.FC<SetupProps> = (props) => {
                   <button onClick={() => setDraft(blankChar("hero"))} className="comic-btn bg-blue-500 text-white w-full py-2 text-sm">+ HERO</button>
                   <button onClick={() => setDraft(blankChar("ally"))} className="comic-btn bg-green-500 text-white w-full py-2 text-sm">+ ALLY</button>
                   <button onClick={() => setDraft(blankChar("villain"))} className="comic-btn bg-purple-600 text-white w-full py-2 text-sm">+ VILLAIN</button>
+                  <label className="comic-btn bg-fuchsia-500 text-white w-full py-2 text-sm text-center cursor-pointer">
+                    ★ IMPORT CAMEO
+                    <input type="file" accept=".json,application/json" className="hidden"
+                      onChange={(e) => { if (e.target.files?.[0]) importCameo(e.target.files[0]); e.target.value = ""; }} />
+                  </label>
+                  <button onClick={openCrossover} className="comic-btn bg-fuchsia-700 text-white w-full py-2 text-sm">⚡ CROSS-OVER</button>
                 </div>
               </div>
 
@@ -429,6 +520,11 @@ export const Setup: React.FC<SetupProps> = (props) => {
         <div className="fixed inset-0 z-[300] bg-black/70 flex items-start justify-center overflow-y-auto p-4">
           <div className="max-w-[560px] w-full bg-white border-[6px] border-black shadow-[10px_10px_0_rgba(0,0,0,.7)] p-5 my-6">
             <h2 className="font-comic text-2xl uppercase mb-3">Create {ROLE_LABELS[draft.role]}</h2>
+            {draft.cameoFrom && (
+              <div className="bg-fuchsia-100 border-2 border-fuchsia-400 text-fuchsia-900 text-xs p-2 mb-3">
+                ★ Guest cameo from <b>"{draft.cameoFrom}"</b>. Review (and tweak the role) below, then Save to add them to this saga.
+              </div>
+            )}
 
             <div className="flex gap-4 mb-4">
               <div className="w-32 shrink-0">
@@ -484,6 +580,55 @@ export const Setup: React.FC<SetupProps> = (props) => {
             <div className="flex justify-end gap-2">
               <button onClick={() => setDraft(null)} className="comic-btn bg-gray-300 px-4 py-2 font-comic uppercase">Cancel</button>
               <button onClick={saveDraft} className="comic-btn bg-green-500 text-white px-6 py-2 font-comic uppercase">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CROSS-OVER PICKER MODAL */}
+      {xover && (
+        <div className="fixed inset-0 z-[300] bg-black/75 flex items-start justify-center overflow-y-auto p-4">
+          <div className="max-w-[620px] w-full bg-white border-[6px] border-fuchsia-600 shadow-[10px_10px_0_rgba(0,0,0,.7)] p-5 my-6">
+            <h2 className="font-comic text-2xl uppercase mb-1">⚡ Cross-Over</h2>
+            <p className="text-xs text-gray-600 mb-3">Bring characters from another one of your sagas into this one as guest stars.</p>
+
+            <label className="font-bold uppercase text-xs block mb-1">Choose a saga</label>
+            <select value={xover.sourceId} onChange={(e) => pickSource(e.target.value)} className="w-full border-2 border-black p-2 mb-3">
+              <option value="">— Select a saga —</option>
+              {props.crossoverSources.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
+            </select>
+
+            {xover.loading && <p className="font-comic text-center py-6">Loading cast…</p>}
+
+            {!xover.loading && xover.sourceId && xover.cast.length === 0 && (
+              <p className="text-sm text-gray-500 py-4 text-center">That saga has no characters to bring over.</p>
+            )}
+
+            {!xover.loading && xover.cast.length > 0 && (
+              <>
+                <p className="text-xs font-bold uppercase mb-2">Pick who joins ({xover.selected.length} selected)</p>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mb-4 max-h-[320px] overflow-y-auto">
+                  {xover.cast.map((c) => {
+                    const on = xover.selected.includes(c.id);
+                    return (
+                      <button key={c.id} onClick={() => toggleXover(c.id)}
+                        className={`border-4 p-1 text-left ${on ? "border-fuchsia-600 bg-fuchsia-50" : "border-black bg-gray-50"}`}>
+                        <img src={`data:image/jpeg;base64,${c.portrait}`} alt={c.name} className="w-full h-20 object-cover border-2 border-black mb-1" />
+                        <div className="font-comic text-sm leading-none truncate">{on ? "✓ " : ""}{c.name}</div>
+                        <div className="text-[10px] uppercase text-gray-600 truncate">{ROLE_LABELS[c.role]}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setXover(null)} className="comic-btn bg-gray-300 px-4 py-2 font-comic uppercase">Cancel</button>
+              <button onClick={confirmCrossover} disabled={xover.selected.length === 0}
+                className="comic-btn bg-fuchsia-600 text-white px-6 py-2 font-comic uppercase disabled:bg-gray-400">
+                Bring in {xover.selected.length || ""}
+              </button>
             </div>
           </div>
         </div>
