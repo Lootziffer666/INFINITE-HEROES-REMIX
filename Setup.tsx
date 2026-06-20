@@ -507,7 +507,7 @@ export const Setup: React.FC<SetupProps> = (props) => {
                 <button onClick={() => setStep(2)} className="comic-btn bg-gray-400 px-4 py-3 font-comic uppercase">Back</button>
                 <button onClick={launch} disabled={heroCount === 0 || props.isTransitioning}
                   className="comic-btn bg-red-600 text-white text-2xl px-6 py-3 w-full uppercase font-comic disabled:bg-gray-400">
-                  {props.isTransitioning ? "Summoning..." : series.gmMode ? "Open Campaign Studio →" : "Roll Initiative!"}
+                  {props.isTransitioning ? "Summoning..." : series.gmMode ? "Open Campaign Studio →" : series.issues.length > 0 ? "Save & Read →" : "Roll Initiative!"}
                 </button>
               </div>
             </div>

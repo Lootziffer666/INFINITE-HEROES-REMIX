@@ -10,10 +10,11 @@ interface HomeProps {
   library: SeriesSummary[];
   onCreate: () => void;
   onOpen: (id: string) => void;
+  onEdit: (id: string) => void;
   onDelete: (id: string) => void;
 }
 
-export const Home: React.FC<HomeProps> = ({ library, onCreate, onOpen, onDelete }) => {
+export const Home: React.FC<HomeProps> = ({ library, onCreate, onOpen, onEdit, onDelete }) => {
   return (
     <div className="fixed inset-0 z-[150] overflow-y-auto bg-black/85 backdrop-blur-md">
       <div className="min-h-full flex flex-col items-center p-6 py-10">
@@ -51,6 +52,7 @@ export const Home: React.FC<HomeProps> = ({ library, onCreate, onOpen, onDelete 
                   <div className="text-xs text-gray-600">{s.castCount} cast · {s.style}</div>
                   <div className="flex gap-1 mt-2">
                     <button onClick={() => onOpen(s.id)} className="flex-1 text-xs border-2 border-black bg-yellow-300 font-comic py-1">OPEN</button>
+                    <button onClick={() => onEdit(s.id)} title="Edit party & settings" className="text-xs border-2 border-black bg-blue-200 font-comic px-2">✎</button>
                     <button onClick={() => { if (confirm(`Delete "${s.title}"? This cannot be undone.`)) onDelete(s.id); }}
                       className="text-xs border-2 border-black bg-red-300 font-comic px-2">✕</button>
                   </div>

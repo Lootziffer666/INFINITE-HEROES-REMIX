@@ -14,10 +14,8 @@ import {
   Campaign,
   CampaignResult,
   CampaignScene,
-  Character,
   CharacterStatus,
   RESULT_LABELS,
-  ROLE_LABELS,
   Series,
   STATUS_LABELS,
   uid,
@@ -101,12 +99,6 @@ export const GMStudio: React.FC<GMStudioProps> = (props) => {
   const pcs = series.cast.filter((c) => c.role === "hero");
   const forgedIssues = (c: Campaign) =>
     c.forgedIssueIds.map((id) => series.issues.find((i) => i.id === id)).filter(Boolean) as Series["issues"];
-
-  const StatusPill: React.FC<{ c: Character }> = ({ c }) => {
-    const st = (c.status ?? "alive") as CharacterStatus;
-    const color = st === "alive" ? "bg-green-300" : st === "fallen" ? "bg-red-300" : "bg-gray-300";
-    return <span className={`text-[10px] font-bold border border-black px-1 ${color}`}>{STATUS_LABELS[st]}</span>;
-  };
 
   return (
     <div className="fixed inset-0 z-[150] overflow-y-auto bg-[#1a1206] text-white">

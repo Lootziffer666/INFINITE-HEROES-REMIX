@@ -163,8 +163,10 @@ const App: React.FC = () => {
     };
   };
 
-  const handleAuth = (e: unknown) => {
-    if (isAuthError(e)) setShowApiKeyDialog(true);
+  const handleAuth = (e: unknown, isGeminiCall = true) => {
+    // Only the Gemini key dialog is relevant for Gemini calls. Errors from a
+    // local/OpenAI text provider shouldn't pop the Gemini paywall dialog.
+    if (isGeminiCall && isAuthError(e)) setShowApiKeyDialog(true);
   };
 
   // ----- Face state helpers -----
@@ -211,18 +213,28 @@ const App: React.FC = () => {
   const generateStoryBeat = async (face: ComicFace) => {
     const beatNum = face.beatNum!;
     const ctx = buildCtx(currentIssueNumber());
+    const textIsGemini = seriesRef.current.provider.textProvider === "gemini";
     updateFace(face.id, { isLoading: true });
+    // Phase 1: write the beat (may use a non-Gemini text provider).
+    let beat;
     try {
-      const beat = await generateBeat(ctx, {
+      beat = await generateBeat(ctx, {
         history: beatHistory(beatNum),
         pageNum: beatNum,
         isDecisionPage: !!face.isDecisionPage,
       });
-      updateFace(face.id, { narrative: beat, choices: beat.choices });
+    } catch (e) {
+      handleAuth(e, textIsGemini);
+      updateFace(face.id, { isLoading: false, error: true });
+      return;
+    }
+    updateFace(face.id, { narrative: beat, choices: beat.choices });
+    // Phase 2: draw the panel (always Gemini).
+    try {
       const url = await generatePanelImage(ctx, beat, "story");
       updateFace(face.id, { imageUrl: url, isLoading: false, error: !url });
     } catch (e) {
-      handleAuth(e);
+      handleAuth(e, true);
       updateFace(face.id, { isLoading: false, error: true });
     }
   };
@@ -301,7 +313,7 @@ const App: React.FC = () => {
         );
         if (synopsis) await persist({ synopsis, status: "complete" });
       } catch (e) {
-        handleAuth(e);
+        handleAuth(e, seriesRef.current.provider.textProvider === "gemini");
       }
     }
 
@@ -344,6 +356,15 @@ const App: React.FC = () => {
       setActiveIssueId(null);
       activeIssueRef.current = null;
       setScreen("gm");
+      return;
+    }
+    // Editing an existing saga (already has issues): save and resume reading
+    // the latest issue rather than creating a duplicate Issue #1.
+    if (s.issues.length > 0) {
+      await saveSeries(s);
+      setLibrary(listSeries());
+      const latest = [...s.issues].sort((a, b) => b.number - a.number)[0];
+      openIssue(s, latest.id);
       return;
     }
     const hasKey = await validateApiKey();
@@ -525,6 +546,17 @@ const App: React.FC = () => {
     else { setActiveIssueId(null); activeIssueRef.current = null; setScreen("setup"); }
   };
 
+  // Edit an existing saga's roster/world/engine settings (route back to Setup).
+  const editSaga = async (id: string) => {
+    const s = await loadSeries(id);
+    if (!s) { alert("Could not load that saga."); return; }
+    seriesRef.current = s;
+    setSeries(s);
+    setActiveIssueId(null);
+    activeIssueRef.current = null;
+    setScreen("setup");
+  };
+
   const removeSaga = async (id: string) => {
     await deleteSeries(id);
     setLibrary(listSeries());
@@ -580,7 +612,7 @@ const App: React.FC = () => {
       {showApiKeyDialog && <ApiKeyDialog onContinue={handleApiKeyDialogContinue} />}
 
       {screen === "home" && (
-        <Home library={library} onCreate={createSaga} onOpen={openSaga} onDelete={removeSaga} />
+        <Home library={library} onCreate={createSaga} onOpen={openSaga} onEdit={editSaga} onDelete={removeSaga} />
       )}
 
       {screen === "setup" && (

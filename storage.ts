@@ -11,7 +11,7 @@
  * No external dependencies — a tiny promise wrapper over the native IndexedDB.
  */
 
-import { Series, SeriesSummary } from "./types";
+import { defaultAudio, defaultProvider, Series, SeriesSummary } from "./types";
 
 const DB_NAME = "infinite-heroes";
 const DB_VERSION = 1;
@@ -122,12 +122,28 @@ export async function saveSeries(series: Series): Promise<void> {
   writeIndex(idx);
 }
 
+// ---------------------------------------------------------------------------
+// SCHEMA NORMALISATION (forward/backward compatibility)
+// ---------------------------------------------------------------------------
+// Sagas saved by older versions of the app predate fields like the OpenAI
+// provider config, audio settings, narrator persona, and campaigns. Merge in
+// defaults on load so the rest of the app can assume a complete shape.
+function normalize(s: Series): Series {
+  return {
+    ...s,
+    provider: { ...defaultProvider(), ...(s.provider || {}) },
+    audio: { ...defaultAudio(), ...(s.audio || {}) },
+    campaigns: s.campaigns ?? [],
+    settings: { persona: "classic", ...s.settings },
+  };
+}
+
 export async function loadSeries(id: string): Promise<Series | null> {
   try {
     const result = await tx<Series | undefined>("readonly", (store) =>
       store.get(id),
     );
-    return result ?? null;
+    return result ? normalize(result) : null;
   } catch (e) {
     console.warn("IndexedDB load failed", e);
     return null;

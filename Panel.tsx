@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from "react";
-import { ComicFace, INITIAL_PAGES } from "./types";
+import { ComicFace } from "./types";
 import { LoadingFX } from "./LoadingFX";
 
 interface PanelProps {
@@ -116,7 +116,7 @@ export const Panel: React.FC<PanelProps> = ({ face, allFaces, onChoice, onOpenBo
         <div className="absolute bottom-20 inset-x-0 flex justify-center z-20">
           <button onClick={(e) => { e.stopPropagation(); onOpenBook(); }} disabled={!gateReady}
             className="comic-btn bg-yellow-400 px-10 py-4 text-3xl font-bold hover:scale-105 animate-bounce disabled:animate-none disabled:bg-gray-400 disabled:cursor-wait">
-            {gateReady ? "READ ISSUE" : `PRINTING... ${Math.min(readyStories, INITIAL_PAGES)}/${INITIAL_PAGES}`}
+            {gateReady ? "READ ISSUE" : "PRINTING…"}
           </button>
         </div>
       )}
