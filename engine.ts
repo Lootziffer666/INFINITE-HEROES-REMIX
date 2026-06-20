@@ -179,6 +179,30 @@ export async function generateBeat(
     )
     .join("\n");
 
+  // ----- Party spotlight balancing -----
+  // Count how often each hero has appeared so far so we can nudge the writer
+  // to give the whole party (not just the first two) coherent screen time.
+  const heroList = series.cast.filter((c) => c.role === "hero");
+  const isParty = heroList.length >= 3;
+  let partyBlock = "";
+  if (isParty) {
+    const appears = (name: string) =>
+      history.filter(
+        (h) =>
+          (h.beat.present || []).some((n) => n.toLowerCase() === name.toLowerCase()) ||
+          (h.beat.scene || "").toLowerCase().includes(name.toLowerCase()),
+      ).length;
+    const counts = heroList.map((h) => ({ name: h.name, n: appears(h.name) }));
+    const min = Math.min(...counts.map((c) => c.n));
+    const underused = counts.filter((c) => c.n === min).map((c) => c.name);
+    partyBlock =
+      `PARTY (${heroList.length} heroes — this is a full adventuring group, NOT a duo): ${heroList.map((h) => h.name).join(", ")}.\n` +
+      `PARTY HANDLING: Over the whole issue, give EVERY hero meaningful moments and in-character beats. In a single panel usually feature 1-3 characters for clarity; reserve the full group for establishing shots, the climax, and big team moments. Keep each hero visually and personality-distinct.` +
+      (history.length > 0
+        ? `\nSPOTLIGHT BALANCE: these heroes have had the least screen time so far — favour them on this page: ${underused.join(", ")}.`
+        : "");
+  }
+
   const continuity =
     priorSynopses.length > 0
       ? `THE STORY SO FAR (previous issues — honour this canon):\n${priorSynopses
@@ -243,7 +267,7 @@ OUTPUT LANGUAGE for caption/dialogue/choices: ${lang.toUpperCase()} (the "scene"
 CAST:
 ${castSheet}
 HEROES: ${heroNames || "(none yet)"} | VILLAINS: ${villainNames || "(none yet)"}
-
+${partyBlock}
 ${continuity}
 ${trueStoryBlock}
 PANELS SO FAR THIS ISSUE:
@@ -257,6 +281,7 @@ RULES:
 3. Vary shot types page to page (wide, close-up, reaction, action).
 4. Keep the cast consistent with their personalities and the canon above.
 5. The "scene" must name every character physically present so the artist can draw them.
+6. Don't crowd a panel: only put characters in "present" who genuinely belong in this shot (usually 1-3), and make sure "present" exactly matches who you describe in "scene".
 
 Return STRICT JSON only (no markdown):
 {
@@ -314,21 +339,53 @@ Return STRICT JSON only (no markdown):
 
 /**
  * Map the beat's "present" names back to cast members (case-insensitive),
- * always including at least the heroes so the page isn't empty.
+ * always including at least the heroes so the page isn't empty. Returned in
+ * stable cast order so the artist gets consistent REFERENCE labels panel to
+ * panel (this is key to keeping a big party visually coherent).
  */
 function presentCast(series: Series, beat: Beat): Character[] {
   const names = (beat.present || []).map((n) => n.toLowerCase());
   let present = series.cast.filter((c) => names.includes(c.name.toLowerCase()));
   if (present.length === 0) {
-    // Fall back to scanning the scene text for names.
     const scene = (beat.scene || "").toLowerCase();
     present = series.cast.filter((c) => scene.includes(c.name.toLowerCase()));
   }
   if (present.length === 0) {
     present = series.cast.filter((c) => c.role === "hero").slice(0, 1);
   }
-  // Cap references so prompts stay reasonable.
-  return present.slice(0, 4);
+  // Stable cast order, then cap. Up to 5 characters can share a panel cleanly;
+  // beyond that the art (and the model) gets muddy.
+  const order = new Map(series.cast.map((c, i) => [c.id, i]));
+  return present
+    .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+    .slice(0, 5);
+}
+
+/** Choose which cast members to reference for a given face type. */
+function imageCast(series: Series, beat: Beat, type: FaceType): Character[] {
+  const heroes = series.cast.filter((c) => c.role === "hero");
+  const villains = series.cast.filter((c) => c.role === "villain");
+  if (type === "story") return presentCast(series, beat);
+  // Covers & recaps are full-party group shots: the WHOLE team plus the lead
+  // villain (capped so the prompt and the art stay coherent).
+  if (type === "cover") return [...heroes.slice(0, 6), ...villains.slice(0, 1)];
+  if (type === "recap") return heroes.slice(0, 6);
+  return [...heroes.slice(0, 3), ...villains.slice(0, 1)];
+}
+
+/**
+ * A text "manifest" tying each REFERENCE number to a name + short look, so the
+ * model anchors identity on words AND image (not image alone). This is what
+ * stops a 5-6 person party from blending into each other.
+ */
+function castManifest(cast: Character[]): string {
+  return cast
+    .map((c, i) => {
+      const look = c.description ? `, ${c.description}` : "";
+      const role = c.charClass || c.role;
+      return `REFERENCE ${i + 1} = ${c.name} (${role})${look}`;
+    })
+    .join("; ");
 }
 
 export async function generatePanelImage(
@@ -341,25 +398,29 @@ export async function generatePanelImage(
   const safety = artistGuardrails(series.settings.audience, series.safeMode);
   const contents: any[] = [];
 
-  const cast = type === "story" ? presentCast(series, beat) : series.cast.filter((c) => c.role === "hero").slice(0, 2);
+  const cast = imageCast(series, beat, type).filter((c) => c.portrait);
   cast.forEach((c, i) => {
-    if (c.portrait) {
-      contents.push({ text: `REFERENCE ${i + 1} [${c.name}]:` });
-      contents.push({ inlineData: { mimeType: "image/jpeg", data: c.portrait } });
-    }
+    contents.push({ text: `REFERENCE ${i + 1} [${c.name}]:` });
+    contents.push({ inlineData: { mimeType: "image/jpeg", data: c.portrait } });
   });
+  const manifest = castManifest(cast);
+  const distinctRule =
+    cast.length > 1
+      ? `CAST (match each person to their REFERENCE by number; keep every character VISUALLY DISTINCT — do NOT merge, swap, duplicate or blend faces/outfits): ${manifest}. `
+      : cast.length === 1
+        ? `CAST: ${manifest}. Maintain STRICT likeness to the reference. `
+        : "";
 
-  let promptText = `STYLE: ${style} comic book art, detailed ink, vibrant colors, dynamic composition. ${safety} `;
+  let promptText = `STYLE: ${style} comic book art, detailed ink, vibrant colors, dynamic composition. ${safety} ${distinctRule}`;
 
   if (type === "cover") {
-    promptText += `TYPE: Comic book COVER for "${series.title}" Issue #${ctx.issueNumber}. Bold title lettering reading "${series.title.toUpperCase()}". Heroic group shot of the lead cast (use the reference images for likeness).`;
+    promptText += `TYPE: Comic book COVER for "${series.title}" Issue #${ctx.issueNumber}. Bold title lettering reading "${series.title.toUpperCase()}". A heroic FULL-PARTY group shot showing the entire team together (${cast.map((c) => c.name).join(", ")}), each clearly recognizable from their reference.`;
   } else if (type === "recap") {
-    promptText += `TYPE: "Previously..." recap splash page. A montage-style image summarising the cast's journey so far. Use reference images for likeness.`;
+    promptText += `TYPE: "Previously..." recap splash page. A montage of the whole party's journey so far; show each hero recognizably.`;
   } else if (type === "back_cover") {
     promptText += `TYPE: Comic BACK COVER. Full-page dramatic teaser for the next issue. Text: "NEXT ISSUE SOON".`;
   } else {
     promptText += `TYPE: Single vertical comic panel. SCENE: ${beat.scene}. `;
-    promptText += `Maintain STRICT likeness to each referenced character. `;
     if (beat.caption) promptText += `INCLUDE a caption box reading: "${beat.caption}". `;
     if (beat.dialogue)
       promptText += `INCLUDE a speech bubble${beat.speaker ? ` from ${beat.speaker}` : ""} reading: "${beat.dialogue}". `;
