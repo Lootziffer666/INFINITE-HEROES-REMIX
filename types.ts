@@ -15,6 +15,16 @@ export const BATCH_SIZE = 6;
 export const DECISION_PAGES = [3, 7];
 
 // ---------------------------------------------------------------------------
+// PARTY / CAST LIMITS
+// ---------------------------------------------------------------------------
+// A realistic tabletop group is up to 5 players; the GM doesn't necessarily
+// play a drawn character. So a single panel features at most 5 cast members
+// (sweet spot for art coherence), while a full-party COVER group shot allows
+// one extra slot for an optional GM character (6 heroes) plus the lead villain.
+export const MAX_PANEL_CAST = 5;
+export const MAX_COVER_HEROES = 6;
+
+// ---------------------------------------------------------------------------
 // CREATIVE PRESETS
 // ---------------------------------------------------------------------------
 export const STYLE_PRESETS = [

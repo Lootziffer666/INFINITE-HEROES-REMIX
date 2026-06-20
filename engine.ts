@@ -26,6 +26,8 @@ import {
   Character,
   FaceType,
   LANGUAGES,
+  MAX_COVER_HEROES,
+  MAX_PANEL_CAST,
   MAX_STORY_PAGES,
   RESULT_LABELS,
   Series,
@@ -353,12 +355,12 @@ function presentCast(series: Series, beat: Beat): Character[] {
   if (present.length === 0) {
     present = series.cast.filter((c) => c.role === "hero").slice(0, 1);
   }
-  // Stable cast order, then cap. Up to 5 characters can share a panel cleanly;
-  // beyond that the art (and the model) gets muddy.
+  // Stable cast order, then cap. Up to MAX_PANEL_CAST characters can share a
+  // panel cleanly; beyond that the art (and the model) gets muddy.
   const order = new Map(series.cast.map((c, i) => [c.id, i]));
   return present
     .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
-    .slice(0, 5);
+    .slice(0, MAX_PANEL_CAST);
 }
 
 /** Choose which cast members to reference for a given face type. */
@@ -366,10 +368,10 @@ function imageCast(series: Series, beat: Beat, type: FaceType): Character[] {
   const heroes = series.cast.filter((c) => c.role === "hero");
   const villains = series.cast.filter((c) => c.role === "villain");
   if (type === "story") return presentCast(series, beat);
-  // Covers & recaps are full-party group shots: the WHOLE team plus the lead
-  // villain (capped so the prompt and the art stay coherent).
-  if (type === "cover") return [...heroes.slice(0, 6), ...villains.slice(0, 1)];
-  if (type === "recap") return heroes.slice(0, 6);
+  // Covers & recaps are full-party group shots: the WHOLE team (room for an
+  // optional GM character) plus the lead villain, capped so art stays coherent.
+  if (type === "cover") return [...heroes.slice(0, MAX_COVER_HEROES), ...villains.slice(0, 1)];
+  if (type === "recap") return heroes.slice(0, MAX_COVER_HEROES);
   return [...heroes.slice(0, 3), ...villains.slice(0, 1)];
 }
 
