@@ -1,4 +1,4 @@
-# Repo Audit — INFINITE HEROES
+# Repo Audit — The Bard's Song
 
 _Audit date: 2026-06-19_
 

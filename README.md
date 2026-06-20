@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ INFINITE HEROES ⚡
+# 🎵 The Bard's Song 🎵
 ### A multi-issue comic-saga creator where *you* are the star
 
 </div>

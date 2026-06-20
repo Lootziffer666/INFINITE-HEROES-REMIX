@@ -233,8 +233,8 @@ export const Setup: React.FC<SetupProps> = (props) => {
           <div className="flex items-center justify-between mb-4">
             <button onClick={props.onBack} className="comic-btn bg-gray-200 px-3 py-1 text-sm">← Library</button>
             <div className="text-center">
-              <h1 className="font-comic text-4xl text-red-600 inline-block mr-2" style={{ textShadow: "2px 2px 0 black" }}>INFINITE</h1>
-              <h1 className="font-comic text-4xl text-yellow-400 inline-block" style={{ textShadow: "2px 2px 0 black" }}>HEROES</h1>
+              <h1 className="font-comic text-4xl text-amber-400 inline-block mr-2" style={{ textShadow: "2px 2px 0 black" }}>THE BARD&apos;S</h1>
+              <h1 className="font-comic text-4xl text-red-600 inline-block" style={{ textShadow: "2px 2px 0 black" }}>SONG</h1>
             </div>
             <div className={`px-3 py-1 border-2 border-black font-comic text-sm ${series.safeMode ? "bg-green-300" : "bg-orange-300"}`}>
               {series.safeMode ? "SAFE MODE ON" : "SAFE MODE OFF"}

@@ -8,7 +8,7 @@ _Last updated: 2026-06-20_
 
 ## What this app is
 
-INFINITE HEROES / "The Bard's Song" (the "App") is a **general-purpose creative
+"The Bard's Song" (the "App") is a **general-purpose creative
 tool**. You provide the inputs — photos, names, descriptions, prompts — and AI
 models turn them into comic pages.
 

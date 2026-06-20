@@ -19,9 +19,9 @@ export const Home: React.FC<HomeProps> = ({ library, onCreate, onOpen, onEdit, o
     <div className="fixed inset-0 z-[150] overflow-y-auto bg-black/85 backdrop-blur-md">
       <div className="min-h-full flex flex-col items-center p-6 py-10">
         <div className="text-center mb-2">
-          <h1 className="font-comic text-6xl text-red-600 inline-block mr-3" style={{ textShadow: "3px 3px 0 black" }}>INFINITE</h1>
-          <h1 className="font-comic text-6xl text-yellow-400 inline-block" style={{ textShadow: "3px 3px 0 black" }}>HEROES</h1>
-          <p className="font-comic text-xl text-white tracking-widest mt-1">YOUR MULTI-ISSUE COMIC SAGAS</p>
+          <h1 className="font-comic text-6xl text-amber-400 inline-block mr-3" style={{ textShadow: "3px 3px 0 black" }}>THE BARD&apos;S</h1>
+          <h1 className="font-comic text-6xl text-red-600 inline-block" style={{ textShadow: "3px 3px 0 black" }}>SONG</h1>
+          <p className="font-comic text-xl text-white tracking-widest mt-1">YOUR ADVENTURES, TOLD AS COMICS</p>
         </div>
 
         <button onClick={onCreate} className="comic-btn bg-green-500 text-black text-2xl px-8 py-3 my-6 uppercase">+ New Saga</button>
