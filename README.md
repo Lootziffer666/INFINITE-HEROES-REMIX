@@ -177,3 +177,12 @@ are size-capped, and all text passes through Safe Mode moderation.
   import pattern.
 - **Continued character sheets & character creator** — deeper progression.
 - **Lyria real-time music** — full streaming underscore.
+
+
+## 📄 License
+
+Licensed under the **Apache License 2.0** — see [`LICENSE`](./LICENSE) and
+[`NOTICE`](./NOTICE). This project began as a remix of a Google AI Studio
+template (Apache-2.0) and has been substantially modified and extended.
+Commercial use is permitted under the license; note that using the Gemini /
+OpenAI / ElevenLabs APIs is additionally subject to those providers' own terms.

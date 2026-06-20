@@ -1,0 +1,48 @@
+INFINITE HEROES (working title)
+===============================
+
+This product is licensed under the Apache License, Version 2.0 (see the
+LICENSE file for the full text).
+
+Origin and attribution
+-----------------------
+This project began as a "remix" of a Google AI Studio template/demo
+("Infinite Heroes" — a localized, personalized comic-book generator), which was
+distributed with Apache License 2.0 headers (SPDX-License-Identifier:
+Apache-2.0). Portions of the original scaffolding remain in this work.
+
+  Original template: Google AI Studio "Infinite Heroes" comic generator demo.
+  Copyright the original author(s). Licensed under the Apache License, 2.0.
+
+Modifications
+-------------
+This work has been substantially modified and extended by the project owner.
+Per Section 4(b) of the Apache License, the following are noted as changed or
+newly added (non-exhaustive):
+
+  - Reworked into a persistent, multi-issue "saga" creator with a party roster,
+    cross-issue continuity and recaps.
+  - New modules: types, engine, llm (multi-provider), safety, storage (split
+    IndexedDB page store), audio, cameo/cross-over, personas, GM campaign mode.
+  - Added Game Master mode (campaign prep + "true story" issue forging,
+    optional permadeath), narrator personas, multi-LLM support, optional audio
+    narration/music, content-safety layer, and a unit-test suite.
+
+  Modifications Copyright [yyyy] [your name or entity].
+  Licensed under the Apache License, Version 2.0.
+
+Third-party components
+----------------------
+This project depends on third-party open-source software distributed under
+their own permissive licenses, including (non-exhaustive):
+
+  - React, React DOM .......... MIT License
+  - @google/genai ............. Apache License 2.0
+  - jsPDF ..................... MIT License
+  - Vite, @vitejs/plugin-react  MIT License
+
+Their respective license texts and notices apply and are retained by their
+authors.
+
+NOTE: Replace "[yyyy]" and "[your name or entity]" above with your own
+identifying information before distributing.
