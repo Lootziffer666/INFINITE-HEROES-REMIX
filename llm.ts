@@ -31,9 +31,11 @@ export function extractJson(raw: string): string {
   const first = t.indexOf("{");
   const last = t.lastIndexOf("}");
   if (first !== -1 && last !== -1 && last > first) {
-    t = t.slice(first, last + 1);
+    return t.slice(first, last + 1);
   }
-  return t || "{}";
+  // No JSON object found: return a valid empty object so callers can parse
+  // without throwing (they apply their own defaults).
+  return "{}";
 }
 
 async function generateGemini(req: TextRequest): Promise<string> {

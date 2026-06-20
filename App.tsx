@@ -38,6 +38,8 @@ import {
   deleteSeries,
   listSeries,
   loadSeries,
+  persistMeta,
+  saveActiveIssue,
   saveSeries,
 } from "./storage";
 import { narrate, startMusic, stopMusic, stopNarration } from "./audio";
@@ -180,7 +182,7 @@ const App: React.FC = () => {
     const s = seriesRef.current;
     const issueId = activeIssueRef.current;
     if (!issueId) {
-      await saveSeries(s);
+      await persistMeta(s);
       setLibrary(listSeries());
       return;
     }
@@ -192,7 +194,8 @@ const App: React.FC = () => {
     const updated = { ...s, issues };
     seriesRef.current = updated;
     setSeries(updated);
-    await saveSeries(updated);
+    // Hot path: rewrite only this issue's pages + the lightweight metadata.
+    await saveActiveIssue(updated, issueId);
     setLibrary(listSeries());
   };
 
@@ -486,6 +489,13 @@ const App: React.FC = () => {
     else if (index === currentSheetIndex && index < sheetCount) setCurrentSheetIndex((p) => p + 1);
   };
 
+  // Jump to another issue of the current saga (back-issue browsing).
+  const switchIssue = async (id: string) => {
+    if (id === activeIssueRef.current) return;
+    await persist();
+    openIssue(seriesRef.current, id);
+  };
+
   // ----- Audio toggles (reader toolbar) -----
   const toggleNarration = () => {
     const cur = series.audio ?? defaultAudio();
@@ -582,7 +592,7 @@ const App: React.FC = () => {
     setSeries(s);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      saveSeries(seriesRef.current).then(() => setLibrary(listSeries()));
+      persistMeta(seriesRef.current).then(() => setLibrary(listSeries()));
     }, 700);
   };
 
@@ -649,6 +659,14 @@ const App: React.FC = () => {
               {series.title} · {activeIssue?.sourceCampaignId ? activeIssue.title : `Issue #${activeIssue?.number ?? 1}`}
             </span>
             <div className="flex items-center gap-1">
+              {series.issues.length > 1 && (
+                <select value={activeIssueId ?? ""} onChange={(e) => switchIssue(e.target.value)}
+                  title="Jump to issue" className="comic-btn bg-white text-black px-1 py-1 text-sm">
+                  {[...series.issues].sort((a, b) => a.number - b.number).map((i) => (
+                    <option key={i.id} value={i.id}>#{i.number}{i.sourceCampaignId ? " \u2605" : ""}</option>
+                  ))}
+                </select>
+              )}
               <button onClick={toggleNarration} title="Narration (read aloud)"
                 className={`comic-btn px-2 py-1 text-sm ${audioCfg.tts !== "off" ? "bg-green-400" : "bg-white"} text-black`}>
                 {audioCfg.tts !== "off" ? "🔊" : "🔇"}

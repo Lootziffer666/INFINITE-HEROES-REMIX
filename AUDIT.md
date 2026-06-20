@@ -54,7 +54,50 @@ The app is in good shape and **builds cleanly**. Architecture is well-separated
 
 ---
 
-## 3. Remaining gaps & recommended extensions
+## 3. Gap-closure pass (follow-up, 2026-06-19)
+
+Most audited gaps are now closed. Status below.
+
+### ✅ Closed
+
+- **Automated tests** — added Vitest + jsdom + `fake-indexeddb`. 34 tests across
+  `safety`, `cameo`, `engine.buildCampaignCanon`, `llm.extractJson`, and a
+  full `storage` round-trip suite (split-store, targeted saves, delete,
+  legacy normalisation). `npm test`.
+- **Persistence scalability** — page artwork now lives in a separate IndexedDB
+  `pages` store keyed by issue id. The hot save path (`saveActiveIssue`)
+  rewrites only the current issue's pages + lightweight metadata; metadata-only
+  edits use `persistMeta`. Backward compatible: legacy v1 records (inline faces)
+  still load and migrate on next save.
+- **Multi-issue browsing** — the reader toolbar now has an issue switcher
+  (shown when a saga has >1 issue) to jump between back-issues; campaign-forged
+  issues are marked with a ★.
+- **Bundle size** — `manualChunks` splits `@google/genai`, `jspdf`, and React
+  into separate chunks. Main app chunk dropped from ~958 KB to ~277 KB and the
+  >500 KB warning is gone.
+- **Audio autoplay** — the ambient context now calls `resume()` on start; music
+  start is idempotent (StrictMode-safe).
+- **Portrait MIME sniffing** — reference images now detect JPEG/PNG/GIF/WebP
+  from the base64 magic prefix instead of assuming JPEG.
+- **`isAuthError` tightening** — provider errors (`LLM HTTP …`) are no longer
+  misread as a Gemini API-key problem.
+
+### ◻ Still open (lower priority)
+
+- **Lyria real-time music** — still an honest ambient fallback; full streaming
+  client (WebSocket + AudioWorklet) is a dedicated follow-up.
+- **Cross-user cameos** — the file format already supports it; only a sharing
+  flow (upload/link) is missing.
+- **Reader narration controls** — currently auto-reads the current page on turn;
+  a play/pause-per-page control would be nicer.
+- **Prefab / purchasable D&D campaigns (NEW idea, "later")** — let GMs import
+  ready-made campaign packs. The `Campaign` model + the hardened cameo/crossover
+  import pattern are a natural foundation (a campaign pack would be a
+  `Campaign` + its NPC `Character` cards). Parked until prioritised.
+
+---
+
+## 4. Original gap list (for reference)
 
 Prioritised. None are blocking; they are the sensible next investments.
 
@@ -109,7 +152,7 @@ Prioritised. None are blocking; they are the sensible next investments.
 
 ---
 
-## 4. Module notes
+## 5. Module notes
 
 - **types.ts** — single source of truth; new fields are optional and
   default-safe, which is why old saves keep working. A few exported helpers
@@ -134,11 +177,12 @@ Prioritised. None are blocking; they are the sensible next investments.
 
 ---
 
-## 5. How to verify locally
+## 6. How to verify locally
 
 ```bash
 npm install
+npm test           # 34 unit tests (safety, cameo, engine, llm, storage)
 echo "GEMINI_API_KEY=your_key" > .env.local
-npm run build      # production build
+npm run build      # production build (chunked)
 npm run dev        # manual smoke test (create a saga, generate an issue)
 ```

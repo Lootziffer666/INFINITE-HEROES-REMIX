@@ -63,6 +63,9 @@ export interface EngineContext {
 
 export function isAuthError(e: unknown): boolean {
   const msg = String(e);
+  // Errors from a non-Gemini provider surface as "LLM HTTP ..." and must NOT
+  // be mistaken for a Gemini API-key problem.
+  if (msg.includes("LLM HTTP")) return false;
   return (
     msg.includes("Requested entity was not found") ||
     msg.includes("API_KEY_INVALID") ||
@@ -77,6 +80,15 @@ function langName(code: string): string {
 
 function getAI(): GoogleGenAI {
   return new GoogleGenAI({ apiKey: process.env.API_KEY });
+}
+
+/** Best-effort MIME sniff from a base64 payload's magic prefix. */
+function mimeOf(b64: string): string {
+  if (b64.startsWith("/9j/")) return "image/jpeg";
+  if (b64.startsWith("iVBOR")) return "image/png";
+  if (b64.startsWith("R0lG")) return "image/gif";
+  if (b64.startsWith("UklGR")) return "image/webp";
+  return "image/jpeg";
 }
 
 /**
@@ -412,7 +424,7 @@ export async function generatePanelImage(
   const cast = imageCast(series, beat, type).filter((c) => c.portrait);
   cast.forEach((c, i) => {
     contents.push({ text: `REFERENCE ${i + 1} [${c.name}]:` });
-    contents.push({ inlineData: { mimeType: "image/jpeg", data: c.portrait } });
+    contents.push({ inlineData: { mimeType: mimeOf(c.portrait), data: c.portrait } });
   });
   const manifest = castManifest(cast);
   const distinctRule =

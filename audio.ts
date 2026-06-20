@@ -125,6 +125,9 @@ function startAmbient(volume: number) {
     const Ctx = window.AudioContext || (window as any).webkitAudioContext;
     if (!Ctx) return;
     audioCtx = new Ctx();
+    // Browsers may create the context suspended until a user gesture; try to
+    // resume (the reader's audio toggles are themselves gestures).
+    audioCtx.resume?.().catch(() => {});
     const gain = audioCtx.createGain();
     gain.gain.value = 0;
     gain.connect(audioCtx.destination);

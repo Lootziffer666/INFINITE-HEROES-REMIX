@@ -134,6 +134,7 @@ and press **Test connection**.
 2. Put your Gemini API key in `.env.local` as `GEMINI_API_KEY=...`
    (image generation always uses Gemini).
 3. `npm run dev`
+4. `npm test` runs the unit suite (safety, cameo, storage, engine, llm).
 
 ## 🗂️ Project structure
 
@@ -171,5 +172,8 @@ are size-capped, and all text passes through Safe Mode moderation.
 
 - **Cross-user cameos** — sharing cards/packs between different people's
   libraries (the file format already supports it; a sharing flow is next).
+- **Prefab / purchasable D&D campaigns** — let GMs import ready-made campaign
+  packs (a `Campaign` plus its NPC cards), building on the cameo/crossover
+  import pattern.
 - **Continued character sheets & character creator** — deeper progression.
 - **Lyria real-time music** — full streaming underscore.

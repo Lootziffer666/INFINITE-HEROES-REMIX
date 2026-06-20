@@ -18,6 +18,19 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
+      },
+      build: {
+        rollupOptions: {
+          output: {
+            // Split heavy vendors into their own chunks so the main app bundle
+            // stays under control and vendors can be cached independently.
+            manualChunks: {
+              genai: ['@google/genai'],
+              pdf: ['jspdf'],
+              react: ['react', 'react-dom'],
+            },
+          },
+        },
       }
     };
 });
