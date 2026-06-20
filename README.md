@@ -186,3 +186,8 @@ Licensed under the **Apache License 2.0** — see [`LICENSE`](./LICENSE) and
 template (Apache-2.0) and has been substantially modified and extended.
 Commercial use is permitted under the license; note that using the Gemini /
 OpenAI / ElevenLabs APIs is additionally subject to those providers' own terms.
+
+
+See [`ACCEPTABLE_USE.md`](./ACCEPTABLE_USE.md) for the content & acceptable-use
+policy (you are responsible for your inputs/prompts; the App bundles no
+third-party IP and is not affiliated with any game publisher).
