@@ -591,6 +591,8 @@ const App: React.FC = () => {
           onGeneratePortrait={onGeneratePortrait}
           onLaunch={startNewSaga}
           onBack={goHome}
+          crossoverSources={library.filter((s) => s.id !== series.id).map((s) => ({ id: s.id, title: s.title }))}
+          loadCrossoverCast={async (id) => (await loadSeries(id))?.cast ?? []}
         />
       )}
 

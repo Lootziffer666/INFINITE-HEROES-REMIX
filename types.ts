@@ -164,6 +164,8 @@ export interface Character {
   notes?: string;
   /** Optional level / milestone marker for progression flavour. */
   level?: number;
+  /** If imported as a guest, the saga this character originally came from. */
+  cameoFrom?: string;
 }
 
 export type CharacterStatus = "alive" | "fallen" | "retired";

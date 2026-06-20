@@ -173,6 +173,14 @@ export async function generateBeat(
     .map((c) => c.name)
     .join(", ");
 
+  // Cross-over guests get acknowledged as special guest appearances.
+  const guests = series.cast.filter((c) => c.cameoFrom);
+  const guestLine = guests.length
+    ? `GUEST STARS (cross-over): ${guests
+        .map((g) => `${g.name} (from "${g.cameoFrom}")`)
+        .join(", ")}. Treat them as special crossover guests; honour their established persona and let the cast react to their presence.`
+    : "";
+
   const historyText = history
     .sort((a, b) => a.pageIndex - b.pageIndex)
     .map(
@@ -270,6 +278,7 @@ CAST:
 ${castSheet}
 HEROES: ${heroNames || "(none yet)"} | VILLAINS: ${villainNames || "(none yet)"}
 ${partyBlock}
+${guestLine}
 ${continuity}
 ${trueStoryBlock}
 PANELS SO FAR THIS ISSUE:
